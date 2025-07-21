@@ -1,3 +1,6 @@
+#![feature(let_chains)]
+#![allow(dead_code)]
+
 mod lexer;
 mod tok;
 mod parser;
@@ -5,7 +8,6 @@ mod parser;
 use clap::{Parser, Subcommand};
 use std::path::Path;
 use crate::lexer::Lexer;
-use crate::tok::Tok;
 
 macro_rules! eeprintln {
     ($($arg:tt)*) => {{
@@ -40,6 +42,7 @@ fn main() {
             }
             if !path.is_file() {
                 eeprintln!("{} директорія", file);
+                std::process::exit(-1);
             }
             lex(file);
         }
@@ -47,11 +50,13 @@ fn main() {
 }
 
 fn lex(file: String) {
-    println!("File: {}", file);
     let lexer: Lexer = Lexer::new(file);
-    let toks: Vec<Tok> = lexer.lex();
-    let mut parser: crate::parser::Parser = crate::parser::Parser::new(toks);
+    let (toks, lines) = lexer.lex();
+
+    let mut parser: parser::Parser = crate::parser::Parser::new(toks, lines);
+
     let ast = parser.parse();
+
     println!("{:?}", ast);
     println!("{:?}", parser.sym_table.into_inner());
 }

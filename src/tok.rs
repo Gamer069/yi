@@ -23,6 +23,12 @@ pub enum Tok {
     Lc,
 }
 
+impl Tok {
+    pub fn to_spanned(&self, line: usize, col: usize) -> SpannedTok {
+        SpannedTok { tok: self.clone(), line, col }
+    }
+}
+
 impl fmt::Display for Tok {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -46,5 +52,18 @@ impl fmt::Display for Tok {
             Tok::Lc => write!(f, "{{"),
             Tok::Rc => write!(f, "}}"),
         }
+    }
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct SpannedTok {
+    pub tok: Tok,
+    pub line: usize,
+    pub col: usize,
+}
+
+impl SpannedTok {
+    pub fn new(tok: Tok, line: usize, col: usize) -> Self {
+        Self { tok, line, col }
     }
 }

@@ -1,34 +1,71 @@
 mod sym_table;
 
 use std::cell::RefCell;
-use std::backtrace::Backtrace;
 use sym_table::SymTable;
 use crate::tok::*;
 
 type AST = Vec<Statements>;
 
-macro_rules! eeprintln {
-    ($($arg:tt)*) => {{
-        eprintln!("{}помилка:{} {}", "\x1b[31m", "\x1b[0m", format!($($arg)*));
-        eprintln!("Backtrace:\n{:?}", Backtrace::capture());
+macro_rules! tok_err {
+    ($expected:expr,$got:expr,$line:expr) => {{
+        eprintln!("{}помилка\x1b[0m: неочікуваний токен: очікувалось '{}', отримано '{}'", "\x1b[31m\x1b[1m", $expected, $got.tok);
+        context!($got, $line);
+    }};
+}
+
+macro_rules! context {
+    ($got:expr,$line:expr) => {{
+        eprintln!("\x1b[34m --> ряд {} стовп {}\x1b[0m", $got.line, $got.col);
+
+        let len = $line.len();
+
+        eprintln!("\x1b[34m{} |{}", " ".repeat($got.line.to_string().len()), " ".repeat(len));
+        eprintln!("{} |  {}{}\x1b[0m", $got.line, "\x1b[1m\x1B[38;2;100;200;220m", $line);
+        eprint!("{} |\x1b[0m", " ".repeat($got.line.to_string().len()));
+
+        for i in 1..=len {
+            if i == $got.col+2 {
+                eprint!("\x1b[31m^\x1b[0m");
+            } else {
+                eprint!(" ");
+            }
+        }
+        eprintln!("");
+    }};
+}
+
+macro_rules! tok_err_end {
+    ($expected:expr) => {{
+        eprintln!("{}помилка:{} неочікуваний токен: очікувалось '{}', отримано кінець файлу", "\x1b[31m", "\x1b[0m", $expected);
+    }};
+}
+
+macro_rules! tok_err_unknown {
+    ($got:expr, $line:expr) => {{
+        eprintln!("{}помилка:{} неочікуваний токен: '{}'", "\x1b[31m", "\x1b[0m", $got.tok);
+        context!($got, $line);
     }};
 }
 
 pub struct Parser {
-    tokens: Vec<Tok>,
-    i: usize,
-    pub sym_table: RefCell<SymTable>
+    pub tokens: Vec<SpannedTok>,
+    pub lines: Vec<String>,
+    pub i: usize,
+    pub sym_table: RefCell<SymTable>, // global
+    pub cur_scope: RefCell<SymTable>, // current local
 }
 
 impl Parser {
-    pub fn new(toks: Vec<Tok>) -> Self {
-        Self { tokens: toks, i: 0, sym_table: RefCell::new(SymTable::new()) }
+    pub fn new(toks: Vec<SpannedTok>, lines: Vec<String>) -> Self {
+        let gst = RefCell::new(SymTable::new());
+        let lst = RefCell::new(SymTable::new());
+        Self { tokens: toks, i: 0, lines, sym_table: gst, cur_scope: lst.clone() }
     }
     pub fn parse(&mut self) -> Result<AST, String> {
         let mut statements: AST = Vec::new();
 
         while self.i < self.tokens.len() {
-            match self.cur() {
+            match self.cur_non_spanned() {
                 Some(Tok::Func) => {
                     self.parse_func_statement();
                 },
@@ -43,17 +80,17 @@ impl Parser {
                 },
                 Some(Tok::Id(id)) => {
                     self.eat();
-                    if self.cur().unwrap() == Tok::Eq {
+                    if self.cur_non_spanned() == Some(Tok::Eq) {
                         self.eat();
                         let expr = self.parse_expr();
-                        self.sym_table.borrow_mut().put(&id, expr).expect("Failed to assign to variable");
+                        self.sym_table.borrow_mut().put(&id, Symbol::Variable(expr)).expect("Failed to assign to variable");
                     }
                 },
                 Some(_) => {
                     let expr = self.parse_expr();
                     statements.push(Statements::Expr(Box::new(expr)));
 
-                    if self.cur() == Some(Tok::Sc) {
+                    if self.cur_non_spanned() == Some(Tok::Sc) {
                         self.eat();
                     }
                 },
@@ -61,23 +98,21 @@ impl Parser {
             }
         };
 
-        println!("{:#?}", self.sym_table);
-
         Ok(statements)
     }
 
-    fn parse_expr(&mut self) -> Expr {
-        let mut left = self.parse_term();
+    fn parse_add_sub(&mut self) -> Expr {
+        let mut left = self.parse_mul_div();
         while let Some(tok) = self.cur() {
-            match tok {
+            match tok.tok {
                 Tok::Add | Tok::Sub => {
-                    let op = match tok {
+                    let op = match tok.tok {
                         Tok::Add => BinOp::Add,
                         Tok::Sub => BinOp::Sub,
                         _ => unreachable!(),
                     };
                     self.eat();
-                    let right = self.parse_term();
+                    let right = self.parse_mul_div();
                     left = Expr::BinOp(Box::new(left), op, Box::new(right));
                 },
                 Tok::Sc | Tok::Rp => break, // Stop parsing expression at semicolon or right parenthesis
@@ -87,12 +122,32 @@ impl Parser {
         left
     }
 
-    fn parse_term(&mut self) -> Expr {
-        let mut left = self.parse_factor();
+    fn parse_expr(&mut self) -> Expr {
+        self.parse_equality()
+    }
+
+    fn parse_equality(&mut self) -> Expr {
+        let mut left = self.parse_add_sub();
+
         while let Some(tok) = self.cur() {
-            match tok {
+            if tok.tok == Tok::EqEq {
+                self.eat(); // consume EqEq
+                let right = self.parse_add_sub();
+                left = Expr::BinOp(Box::new(left), BinOp::EqEq, Box::new(right));
+            } else {
+                break;
+            }
+        }
+        left
+    }
+
+    fn parse_mul_div(&mut self) -> Expr {
+        let mut left = self.parse_factor();
+
+        while let Some(tok) = self.cur() {
+            match tok.tok {
                 Tok::Mul | Tok::Div => {
-                    let op = match tok {
+                    let op = match tok.tok {
                         Tok::Mul => BinOp::Mul,
                         Tok::Div => BinOp::Div,
                         _ => unreachable!(),
@@ -101,17 +156,26 @@ impl Parser {
                     let right = self.parse_factor();
                     left = Expr::BinOp(Box::new(left), op, Box::new(right));
                 },
-                Tok::Add | Tok::Sub | Tok::Sc | Tok::Rp => break, // Break on operators with lower precedence
                 _ => break,
             }
         }
         left
     }
 
+    fn cur_non_spanned(&self) -> Option<Tok> {
+        if let Some(cur) = self.cur() { 
+            Some(cur.tok)
+        } else {
+            None
+        }
+    }
+
     fn parse_factor(&mut self) -> Expr {
         // ok, for now we WON'T have local/global variations of variables, just global ones but
         // I'll implement that later
-        match self.cur() {
+        let cur = self.cur_non_spanned();
+
+        match cur {
             Some(Tok::I64(num)) => {
                 let value = num;
                 self.eat();
@@ -130,13 +194,15 @@ impl Parser {
             Some(Tok::Lp) => {
                 self.eat();
                 let expr_node = self.parse_expr();
-                if self.cur() == Some(Tok::Rp) {
+                let cur = self.cur_non_spanned();
+                if cur == Some(Tok::Rp) {
                     self.eat();
                 } else {
-                    eeprintln!("Expected ')' but got {:?}", self.cur());
-                    std::process::exit(-1);
-                }
-                // self.eat_tok(Tok::Rp);
+            let cur = self.cur().unwrap();
+            tok_err!(Tok::Rp, cur, self.lines[cur.line - 1]);
+            std::process::exit(-1);
+        }
+
                 expr_node
             },
             Some(Tok::Id(id)) => {
@@ -154,9 +220,10 @@ impl Parser {
                 Expr::Bool(val)
             },
             _ => {
-                eeprintln!("Unexpected token {:?}", self.cur().unwrap());
+                let cur = self.cur().unwrap();
+                tok_err_unknown!(cur, self.lines[cur.line - 1]);
                 std::process::exit(-1);
-            }
+            },
         }
     }
 
@@ -167,13 +234,13 @@ impl Parser {
         let expr = self.parse_expr();
 
         // Check for and consume semicolon if present
-        if self.cur() == Some(Tok::Sc) {
+        if let Some(tok) = self.cur() && tok.tok == Tok::Sc {
             self.eat();
         }
 
-        self.sym_table.borrow_mut().put(&id, expr.clone());
+        self.sym_table.borrow_mut().put(&id, Symbol::Variable(expr.clone()));
 
-        Statements::Let(id, Box::from(expr), false)
+        Statements::Let(id, Box::from(expr))
     }
 
     fn parse_func_statement(&mut self) -> Statements {
@@ -187,41 +254,47 @@ impl Parser {
 
         let mut statements: AST = Vec::new();
 
-        while self.cur() != Some(Tok::Rc) {
-            match self.cur() {
-                Some(Tok::Func) => {
+        while let Some(cur) = self.cur() {
+            match cur.tok {
+                Tok::Rc => {
+                    break;
+                },
+                Tok::Func => {
                     self.parse_func_statement();
                 },
-                Some(Tok::Let) => {
+                Tok::Let => {
                     let statement = self.parse_let_statement();
                     statements.push(statement);
                 },
-                Some(Tok::Sc) => {
-                    // Skip standalone semicolons
+                Tok::Sc => {
                     self.eat();
+
                     continue;
                 },
-                Some(Tok::Id(id)) => {
+                Tok::Id(id) => {
                     self.eat();
-                    if self.cur().unwrap() == Tok::Eq {
+                    if let Some(tok) = self.cur() && let Tok::Eq = tok.tok {
                         self.eat();
                         let expr = self.parse_expr();
-                        self.sym_table.borrow_mut().put(&id, expr).expect("Failed to assign to variable");
+                        self.sym_table.borrow_mut().put(&id, Symbol::Variable(expr)).expect("Failed to assign to variable");
                     }
                 },
-                Some(_) => {
+                _ => {
                     let expr = self.parse_expr();
                     statements.push(Statements::Expr(Box::new(expr)));
 
-                    if self.cur() == Some(Tok::Sc) {
+                    if let Some(tok) = self.cur() && let Tok::Sc = tok.tok {
                         self.eat();
                     }
                 },
-                None => break,
             }
         };
 
-        println!("{:#?}", self.sym_table);
+        if self.cur_scope.borrow().is_empty() {
+            self.cur_scope.borrow_mut().clear();
+        }
+
+        self.sym_table.borrow_mut().put(&id, Symbol::Function(statements.clone(), self.cur_scope.clone()));
 
         self.eat_tok(Tok::Rc);
 
@@ -229,22 +302,23 @@ impl Parser {
     }
 
     fn parse_id(&mut self) -> String {
-        if let Some(Tok::Id(id)) = self.cur() {
+        if let Some(tok) = self.cur() && let Tok::Id(id) = tok.tok {
             let id_clone = id.clone();
             self.eat();
             id_clone
         } else {
-            eeprintln!("Expected ID but got {:?}", self.cur().unwrap());
+            let cur = self.cur().unwrap();
+            tok_err!(Tok::Id(String::new()), cur, self.lines[cur.line - 1]);
             std::process::exit(-1);
         }
     }
 
-    fn cur(&self) -> Option<Tok> {
+    fn cur(&self) -> Option<SpannedTok> {
         self.tokens.get(self.i).cloned()
     }
 
-    fn eat(&mut self) -> Option<Tok> {
-        let tok = self.tokens.get(self.i).cloned();
+    fn eat(&mut self) -> Option<SpannedTok> {
+        let tok = self.cur();
         self.i += 1;
         tok
     }
@@ -253,14 +327,14 @@ impl Parser {
         if let Some(cur_tok) = self.cur() {
             // Use discriminant comparison instead of direct equality
             // This ensures we only check the enum variant, not the contained values
-            if std::mem::discriminant::<_>(&cur_tok) == std::mem::discriminant(&expected_tok) {
+            if std::mem::discriminant(&cur_tok.tok) == std::mem::discriminant(&expected_tok) {
                 self.eat();
             } else {
-                eeprintln!("Expected {:?} but got {:?}", expected_tok, cur_tok);
+                tok_err!(expected_tok, cur_tok, self.lines[cur_tok.line]);
                 std::process::exit(-1);
             }
         } else {
-            eeprintln!("Expected {:?} but reached end of tokens", expected_tok);
+            tok_err_end!(expected_tok);
             std::process::exit(-1);
         }
     }
@@ -273,6 +347,13 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    EqEq,
+}
+
+#[derive(Debug, Clone)]
+pub enum Symbol {
+    Variable(Expr),
+    Function(Vec<Statements>, RefCell<SymTable>)
 }
 
 #[derive(Debug, Clone)]
@@ -288,7 +369,7 @@ pub enum Expr {
 
 #[derive(Debug, Clone)]
 pub enum Statements {
-    Let(String, Box<Expr>, bool),
+    Let(String, Box<Expr>),
     Func(String, Vec<Statements>),
     Expr(Box<Expr>),
 }
