@@ -1,12 +1,18 @@
-use std::cell::RefCell;
-
-use sym_table::SymTable;
-
-use crate::tok::*;
-
 mod sym_table;
 
+use std::cell::RefCell;
+use std::backtrace::Backtrace;
+use sym_table::SymTable;
+use crate::tok::*;
+
 type AST = Vec<Statements>;
+
+macro_rules! eeprintln {
+    ($($arg:tt)*) => {{
+        eprintln!("{}помилка:{} {}", "\x1b[31m", "\x1b[0m", format!($($arg)*));
+        eprintln!("Backtrace:\n{:?}", Backtrace::capture());
+    }};
+}
 
 pub struct Parser {
     tokens: Vec<Tok>,
@@ -127,7 +133,7 @@ impl Parser {
                 if self.cur() == Some(Tok::Rp) {
                     self.eat();
                 } else {
-                    eprintln!("Expected ')' but got {:?}", self.cur());
+                    eeprintln!("Expected ')' but got {:?}", self.cur());
                     std::process::exit(-1);
                 }
                 // self.eat_tok(Tok::Rp);
@@ -148,7 +154,7 @@ impl Parser {
                 Expr::Bool(val)
             },
             _ => {
-                eprintln!("Unexpected token {:?}", self.cur().unwrap());
+                eeprintln!("Unexpected token {:?}", self.cur().unwrap());
                 std::process::exit(-1);
             }
         }
@@ -228,7 +234,7 @@ impl Parser {
             self.eat();
             id_clone
         } else {
-            eprintln!("Expected ID but got {:?}", self.cur().unwrap());
+            eeprintln!("Expected ID but got {:?}", self.cur().unwrap());
             std::process::exit(-1);
         }
     }
@@ -250,11 +256,11 @@ impl Parser {
             if std::mem::discriminant::<_>(&cur_tok) == std::mem::discriminant(&expected_tok) {
                 self.eat();
             } else {
-                eprintln!("Expected {:?} but got {:?}", expected_tok, cur_tok);
+                eeprintln!("Expected {:?} but got {:?}", expected_tok, cur_tok);
                 std::process::exit(-1);
             }
         } else {
-            eprintln!("Expected {:?} but reached end of tokens", expected_tok);
+            eeprintln!("Expected {:?} but reached end of tokens", expected_tok);
             std::process::exit(-1);
         }
     }

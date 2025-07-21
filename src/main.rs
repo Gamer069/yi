@@ -22,6 +22,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    #[clap(alias = "b")]
     Build {
         file: String
     },

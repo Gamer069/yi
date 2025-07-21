@@ -56,7 +56,7 @@ impl Lexer {
                         }
                         toks.push(Tok::Id(id));
                     },
-                    'A'..'z' => {
+                    'A'..='z' => {
                         eeprintln!("Англійський тут не працює");
                         std::process::exit(-1);
                     },
