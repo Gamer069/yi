@@ -1,6 +1,6 @@
 mod sym_table;
 
-use std::cell::RefCell;
+use std::{cell::RefCell, rc::Rc};
 use sym_table::SymTable;
 use crate::tok::*;
 
@@ -52,14 +52,14 @@ pub struct Parser {
     pub lines: Vec<String>,
     pub i: usize,
     pub sym_table: RefCell<SymTable>, // global
-    pub cur_scope: RefCell<SymTable>, // current local
+    pub cur_scope: Rc<RefCell<SymTable>>, // current local
+    pub cur_scope_is_global: bool,
 }
 
 impl Parser {
     pub fn new(toks: Vec<SpannedTok>, lines: Vec<String>) -> Self {
         let gst = RefCell::new(SymTable::new());
-        let lst = RefCell::new(SymTable::new());
-        Self { tokens: toks, i: 0, lines, sym_table: gst, cur_scope: lst.clone() }
+        Self { tokens: toks, i: 0, lines, sym_table: gst.clone(), cur_scope: Rc::new(gst), cur_scope_is_global: true }
     }
     pub fn parse(&mut self) -> Result<AST, String> {
         let mut statements: AST = Vec::new();
@@ -67,7 +67,8 @@ impl Parser {
         while self.i < self.tokens.len() {
             match self.cur_non_spanned() {
                 Some(Tok::Func) => {
-                    self.parse_func_statement();
+                    let statement = self.parse_func_statement();
+                    statements.push(statement);
                 },
                 Some(Tok::Let) => {
                     let statement = self.parse_let_statement();
@@ -83,7 +84,7 @@ impl Parser {
                     if self.cur_non_spanned() == Some(Tok::Eq) {
                         self.eat();
                         let expr = self.parse_expr();
-                        self.sym_table.borrow_mut().put(&id, Symbol::Variable(expr)).expect("Failed to assign to variable");
+                        self.cur_scope.borrow_mut().put(&id, Symbol::Variable(expr)).expect("Failed to assign to variable");
                     }
                 },
                 Some(_) => {
@@ -171,8 +172,6 @@ impl Parser {
     }
 
     fn parse_factor(&mut self) -> Expr {
-        // ok, for now we WON'T have local/global variations of variables, just global ones but
-        // I'll implement that later
         let cur = self.cur_non_spanned();
 
         match cur {
@@ -238,7 +237,11 @@ impl Parser {
             self.eat();
         }
 
-        self.sym_table.borrow_mut().put(&id, Symbol::Variable(expr.clone()));
+        if self.cur_scope_is_global {
+            self.sym_table.borrow_mut().put(&id, Symbol::Variable(expr.clone()));
+        } else {
+            self.cur_scope.borrow_mut().put(&id, Symbol::Variable(expr.clone()));
+        }
 
         Statements::Let(id, Box::from(expr))
     }
@@ -253,6 +256,10 @@ impl Parser {
         self.eat_tok(Tok::Lc);
 
         let mut statements: AST = Vec::new();
+
+        let prev_scope = self.cur_scope.clone();
+        let func_scope = Rc::new(RefCell::new(SymTable::new()));
+        self.cur_scope = func_scope.clone();
 
         while let Some(cur) = self.cur() {
             match cur.tok {
@@ -276,7 +283,7 @@ impl Parser {
                     if let Some(tok) = self.cur() && let Tok::Eq = tok.tok {
                         self.eat();
                         let expr = self.parse_expr();
-                        self.sym_table.borrow_mut().put(&id, Symbol::Variable(expr)).expect("Failed to assign to variable");
+                        self.cur_scope.borrow_mut().put(&id, Symbol::Variable(expr)).expect("Failed to assign to variable");
                     }
                 },
                 _ => {
@@ -290,11 +297,9 @@ impl Parser {
             }
         };
 
-        if self.cur_scope.borrow().is_empty() {
-            self.cur_scope.borrow_mut().clear();
-        }
-
         self.sym_table.borrow_mut().put(&id, Symbol::Function(statements.clone(), self.cur_scope.clone()));
+
+        self.cur_scope = prev_scope;
 
         self.eat_tok(Tok::Rc);
 
@@ -330,7 +335,7 @@ impl Parser {
             if std::mem::discriminant(&cur_tok.tok) == std::mem::discriminant(&expected_tok) {
                 self.eat();
             } else {
-                tok_err!(expected_tok, cur_tok, self.lines[cur_tok.line]);
+                tok_err!(expected_tok, cur_tok, self.lines[cur_tok.line-1]);
                 std::process::exit(-1);
             }
         } else {
@@ -353,7 +358,7 @@ pub enum BinOp {
 #[derive(Debug, Clone)]
 pub enum Symbol {
     Variable(Expr),
-    Function(Vec<Statements>, RefCell<SymTable>)
+    Function(Vec<Statements>, Rc<RefCell<SymTable>>)
 }
 
 #[derive(Debug, Clone)]
@@ -370,6 +375,7 @@ pub enum Expr {
 #[derive(Debug, Clone)]
 pub enum Statements {
     Let(String, Box<Expr>),
+    Assign(String, Box<Expr>),
     Func(String, Vec<Statements>),
     Expr(Box<Expr>),
 }
