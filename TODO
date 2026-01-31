@@ -1,1 +1,0 @@
-i added self.cur_scope to the parser, which means that now i need to add all the variables and stuff to IT rather than the GLOBAL one, i'll figure that out later i need to read this file tomorrow.

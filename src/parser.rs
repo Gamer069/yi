@@ -1,7 +1,5 @@
-mod sym_table;
-
 use std::{cell::RefCell, rc::Rc};
-use sym_table::SymTable;
+use crate::sym_table::SymTable;
 use crate::tok::*;
 
 type AST = Vec<Statements>;
@@ -84,7 +82,7 @@ impl Parser {
                     if self.cur_non_spanned() == Some(Tok::Eq) {
                         self.eat();
                         let expr = self.parse_expr();
-                        self.cur_scope.borrow_mut().put(&id, Symbol::Variable(expr)).expect("Failed to assign to variable");
+                        statements.push(Statements::Assign(id, Box::new(expr)));
                     }
                 },
                 Some(_) => {
@@ -238,8 +236,10 @@ impl Parser {
         }
 
         if self.cur_scope_is_global {
+			println!("IS GLOBAL, {}", id);
             self.sym_table.borrow_mut().put(&id, Symbol::Variable(expr.clone()));
         } else {
+			println!("IS NOT GLOBAL, {}", id);
             self.cur_scope.borrow_mut().put(&id, Symbol::Variable(expr.clone()));
         }
 
@@ -260,6 +260,7 @@ impl Parser {
         let prev_scope = self.cur_scope.clone();
         let func_scope = Rc::new(RefCell::new(SymTable::new()));
         self.cur_scope = func_scope.clone();
+		self.cur_scope_is_global = false;
 
         while let Some(cur) = self.cur() {
             match cur.tok {
@@ -283,7 +284,7 @@ impl Parser {
                     if let Some(tok) = self.cur() && let Tok::Eq = tok.tok {
                         self.eat();
                         let expr = self.parse_expr();
-                        self.cur_scope.borrow_mut().put(&id, Symbol::Variable(expr)).expect("Failed to assign to variable");
+                        self.cur_scope.borrow_mut().set(&id, Symbol::Variable(expr)).expect("Failed to assign to variable");
                     }
                 },
                 _ => {
@@ -300,6 +301,10 @@ impl Parser {
         self.sym_table.borrow_mut().put(&id, Symbol::Function(statements.clone(), self.cur_scope.clone()));
 
         self.cur_scope = prev_scope;
+		
+		// TODO: use a smarter way to determine current scope globalness - nested functions will
+		// in-fact exist
+		self.cur_scope_is_global = true;
 
         self.eat_tok(Tok::Rc);
 

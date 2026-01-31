@@ -1,13 +1,14 @@
-#![feature(let_chains)]
 #![allow(dead_code)]
 
 mod lexer;
 mod tok;
 mod parser;
+mod ir;
+mod sym_table;
 
 use clap::{Parser, Subcommand};
 use std::path::Path;
-use crate::lexer::Lexer;
+use crate::{ir::IRGenerator, lexer::Lexer};
 
 macro_rules! eeprintln {
     ($($arg:tt)*) => {{
@@ -55,8 +56,8 @@ fn lex(file: String) {
 
     let mut parser: parser::Parser = crate::parser::Parser::new(toks, lines);
 
-    let ast = parser.parse();
+    let ast = parser.parse().expect("Failed to parse");
 
-    println!("{:?}", ast);
-    println!("{:?}", parser.sym_table.into_inner());
+    let mut generator: IRGenerator = IRGenerator::new(ast, parser.sym_table.into_inner());
+    generator.generate();
 }
