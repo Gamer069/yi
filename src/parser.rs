@@ -22,7 +22,7 @@ macro_rules! context {
 		eprint!("{} |\x1b[0m", " ".repeat($got.line.to_string().len()));
 
 		for i in 1..=len {
-			if i == $got.col+2 {
+			if i == $got.col+3 {
 				eprint!("\x1b[31m^\x1b[0m");
 			} else {
 				eprint!(" ");
