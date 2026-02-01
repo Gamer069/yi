@@ -1,13 +1,18 @@
+use std::fs::File;
+use std::io::Write;
+use std::process::Command;
 use std::{collections::HashMap};
 
+use cranelift::codegen::Context;
 use cranelift::codegen::ir::Function;
 use cranelift::codegen::settings::Configurable;
 use cranelift::codegen::{ir::{types, InstBuilder, Type, Value}, settings};
 use cranelift::frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
+use cranelift::module::{FuncId, Linkage, Module};
 use cranelift::object::{ObjectBuilder, ObjectModule};
-use cranelift::prelude::EntityRef;
+use cranelift::prelude::{AbiParam, EntityRef};
 
-use crate::{parser::{BinOp, Expr, Statements, Symbol}, sym_table::SymTable};
+use crate::{parser::{BinOp, Expr, Statements}, sym_table::SymTable};
 
 macro_rules! eeprintln {
     ($($arg:tt)*) => {{
@@ -45,31 +50,23 @@ pub struct IRGenerator {
     pub gst: SymTable, // global symbol table
     pub cranelift_var_map: HashMap<String, usize>,
     pub cranelift_signedness_map: HashMap<String, Signedness>,
-    pub module: ObjectModule,
+    // hack to get around the borrow checker - module should not really be Option
+    pub module: Option<ObjectModule>,
 	pub builder_ctx: FunctionBuilderContext,
 	pub functions: HashMap<String, Function>,
+    pub functions_to_id: HashMap<String, FuncId>,
 }
 
 impl IRGenerator {
     pub fn new(ast: Vec<Statements>, gst: SymTable) -> Self {
-        let mut cranelift_var_map = HashMap::new();
-        let mut cranelift_signedness_map = HashMap::new();
-
-        for (i, (key, sym)) in gst.iter().enumerate() {
-            if let Symbol::Variable(expr) = sym {
-                cranelift_var_map.insert(key.clone(), i);
-
-                if let Expr::U64(_) = expr {
-                    cranelift_signedness_map.insert(key.clone(), Signedness::Signed);
-                } else {
-                    cranelift_signedness_map.insert(key.clone(), Signedness::Unsigned);
-                }
-            }
-        }
+        let cranelift_var_map = HashMap::new();
+        let cranelift_signedness_map = HashMap::new();
 
 		let mut flag_buildr = settings::builder();
 		flag_buildr.set("use_colocated_libcalls", "false").unwrap();
-		flag_buildr.set("is_pic", "false").unwrap();
+		flag_buildr.set("is_pic", "true").unwrap();
+
+        // TODO: take arguments for flag_buildr flags
 
 		let isa_buildr = cranelift::native::builder().unwrap_or_else(|msg| {
 			eeprintln!("Хост-машина не підтримується: {}", msg);
@@ -90,7 +87,33 @@ impl IRGenerator {
 
 		let builder_ctx = FunctionBuilderContext::new();
 
-        Self { ast, gst, cranelift_var_map, cranelift_signedness_map, module, builder_ctx, functions: HashMap::new() }
+        Self { ast, gst, cranelift_var_map, cranelift_signedness_map, module: Some(module), builder_ctx, functions: HashMap::new(), functions_to_id: HashMap::new() }
+    }
+
+    pub fn translate_std_func_name<'a>(yi_name: &'a str) -> &'a str {
+        match yi_name {
+            "друклн" => "drukln",
+            "старт" => "main",
+            _ => yi_name, // fallback to original if not in map
+        }
+    }
+
+
+    pub fn add_std_functions(&mut self) {
+        let module = self.module.as_mut().expect("Module not initialized");
+
+        let mut sig = module.make_signature();
+        // TODO: come back to this when args will be added!
+        // sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(types::I32)); // or void
+
+        let println_name = Self::translate_std_func_name("друклн");
+
+        let println_id = module
+            .declare_function(println_name, Linkage::Import, &sig)
+            .expect("Failed to declare друклн");
+
+        self.functions_to_id.insert(println_name.to_string(), println_id);
     }
 
     pub fn generate(&mut self) {
@@ -100,6 +123,8 @@ impl IRGenerator {
             eeprintln!("програма має мати функцію старт()");
             std::process::exit(-1);
         }
+
+        self.add_std_functions();
 
 		let func_data: Vec<(String, Vec<Statements>)> = self.ast.iter()
 			.filter_map(|stmt| {
@@ -115,6 +140,40 @@ impl IRGenerator {
 		for (id, stmts) in func_data {
 			self.gen_func(id, stmts);
 		}
+
+        // PRINTIN' TIME!
+        let mut module = self.module.take().expect("Module missing");
+
+        // TODO: error handling
+        for (func_id, func) in self.functions.clone() {
+            let new_func_id = if func_id == "старт" { "main" } else { &func_id };
+            let func_id = module.declare_function(new_func_id, Linkage::Export, &func.signature).expect("Failed to declare function");
+            let mut ctx = Context::for_function(func.clone());
+            ctx.func = func;  // your Cranelift Function
+            module.define_function(func_id, &mut ctx).expect("Failed to define function");
+
+            self.functions_to_id.insert(new_func_id.to_string(), func_id);
+        }
+
+        let product = module.finish();
+        let product_bytes = product.emit().unwrap();
+
+        let mut file = File::create("output.o").unwrap();
+        file.write_all(&product_bytes).unwrap();
+
+        // TODO: dont depend on clang
+        let link = Command::new("clang")
+            .args(&["output.o", "libyi_std.a", "-o", "output"])
+            .output()
+            .expect("Failed to run linker");
+
+        if !link.status.success() {
+            eeprintln!("Лінкувати не вийшло:");
+            eeprintln!("{}", String::from_utf8_lossy(&link.stderr));
+            std::process::exit(-1);
+        }
+
+        let _ = std::fs::remove_file("output.o");
     }
 
 	pub fn gen_func(&mut self, id: String, stmts: Vec<Statements>) {
@@ -125,15 +184,20 @@ impl IRGenerator {
 
 		let entry_block = func_builder.create_block();
 		func_builder.switch_to_block(entry_block);
-		func_builder.seal_block(entry_block);
 
 		for stmt in stmts {
 			if let Statements::Let(var_id, expr) = stmt {
 				self.gen_let(var_id, expr, &mut func_builder);
 			} else if let Statements::Assign(var_id, expr) = stmt {
 				self.gen_assign(var_id, expr, &mut func_builder);
-			}
+			} else if let Statements::Expr(expr) = stmt {
+                self.gen_expr(*expr, &mut func_builder);
+            }
 		}
+
+        func_builder.ins().return_(&[]);
+
+		func_builder.seal_block(entry_block);
 
 		func_builder.finalize();
 
@@ -144,23 +208,23 @@ impl IRGenerator {
 
 	pub fn gen_let(&mut self, var_id: String, expr: Box<Expr>, mut func_builder: &mut FunctionBuilder<'_>) {
 		let expr = *expr;
-		let (val, _signedness) = self.gen_expr(expr.clone(), &mut func_builder);
-
-		let ty = self.type_to_cranelift_type(expr, &mut func_builder);
+		let (val, signedness) = self.gen_expr(expr.clone(), &mut func_builder);
+        let ty = func_builder.func.dfg.value_type(val);
 		let new_var = func_builder.declare_var(ty);
 
 		func_builder.def_var(new_var, val);
 
-		self.cranelift_var_map.insert(var_id, new_var.as_u32() as usize);
+		self.cranelift_var_map.insert(var_id.clone(), new_var.as_u32() as usize);
+        self.cranelift_signedness_map.insert(var_id, signedness);
 	}
 
-	pub fn gen_assign(&self, var_id: String, expr: Box<Expr>, mut func_builder: &mut FunctionBuilder<'_>) {
-		let var = self.cranelift_var_map.get(&var_id);
+	pub fn gen_assign(&mut self, var_id: String, expr: Box<Expr>, mut func_builder: &mut FunctionBuilder<'_>) {
+		let var = self.cranelift_var_map.get(&var_id).copied();
 
 		let (val, _signedness) = self.gen_expr(*expr.clone(), &mut func_builder);
 
 		if let Some(var) = var {
-			let variable = Variable::new(*var);
+			let variable = Variable::new(var);
 			func_builder.def_var(variable, val);
 		} else {
 			eeprintln!("Змінна {} не задеклерована", var_id);
@@ -168,50 +232,7 @@ impl IRGenerator {
 		}
 	}
 
-	pub fn type_to_cranelift_type(&self, ty: Expr, func_builder: &mut FunctionBuilder<'_>) -> Type {
-		match ty {
-            Expr::U64(_) => {
-				types::I64
-			},
-            Expr::F64(_) => {
-				types::F64
-			},
-            Expr::I64(_) => {
-				types::I64
-			},
-            Expr::Str(_) => {
-				unimplemented!()
-			},
-            Expr::Bool(_) => {
-				types::I8
-			},
-            Expr::Id(id) => {
-				let var_index = self.cranelift_var_map.get(&id);
-
-				if let Some(var_index) = var_index {
-					let var = Variable::new(*var_index);
-					let val = func_builder.use_var(var);
-					func_builder.func.dfg.value_type(val)
-				} else {
-					eeprintln!("Змінна {} не задеклерована", id);
-					std::process::exit(-1);
-				}
-			},
-            Expr::BinOp(_left, op, _right) => {
-				match op {
-					// result of addition is type of f64 (for now)
-					// result of subtraction is type of f64 (for now)
-					// result of multiplication is type of f64 (for now)
-					// result of division is type of f64 (for now)
-					BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => types::F64,
-					// result of == is a boolean (byte)
-					BinOp::EqEq => types::I8,
-				}
-            },
-		}
-	}
-
-    pub fn gen_expr(&self, expr: Expr, builder: &mut FunctionBuilder) -> (Value, Signedness) {
+    pub fn gen_expr(&mut self, expr: Expr, builder: &mut FunctionBuilder) -> (Value, Signedness) {
         match expr {
             Expr::U64(val) => {
                 (builder.ins().iconst(types::I64, val as i64), Signedness::Unsigned)
@@ -241,6 +262,24 @@ impl IRGenerator {
                     std::process::exit(-1);
                 }
 			},
+            Expr::Call(id) => {
+                let actual_name = Self::translate_std_func_name(&id);
+                let module = self.module.as_mut();
+                let func_id = self.functions_to_id.get(actual_name).unwrap();
+
+                let func_ref = module.unwrap().declare_func_in_func(func_id.clone(), &mut builder.func);
+
+                let call_inst = builder.ins().call(func_ref, &[]);
+                let res = builder.inst_results(call_inst);
+
+                if res.len() > 0 {
+                    (res[0], Signedness::Signed)
+                } else {
+                    // Void function - return dummy value
+                    (builder.ins().iconst(types::I32, 0), Signedness::Signed)
+                }
+
+            }
             Expr::BinOp(left, op, right) => {
                 let (left_val, left_signedness) = self.gen_expr(*left, builder);
                 let (right_val, right_signedness) = self.gen_expr(*right, builder);
