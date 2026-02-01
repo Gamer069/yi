@@ -236,10 +236,8 @@ impl Parser {
         }
 
         if self.cur_scope_is_global {
-			println!("IS GLOBAL, {}", id);
             self.sym_table.borrow_mut().put(&id, Symbol::Variable(expr.clone()));
         } else {
-			println!("IS NOT GLOBAL, {}", id);
             self.cur_scope.borrow_mut().put(&id, Symbol::Variable(expr.clone()));
         }
 
@@ -249,7 +247,6 @@ impl Parser {
     fn parse_func_statement(&mut self) -> Statements {
         self.eat_tok(Tok::Func);
         let id = self.parse_id();
-        println!("id: {:?}", id);
         self.eat_tok(Tok::Lp);
         // TODO: args
         self.eat_tok(Tok::Rp);

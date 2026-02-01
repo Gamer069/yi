@@ -1,9 +1,9 @@
 use std::{collections::HashMap};
 
+use cranelift::codegen::ir::Function;
 use cranelift::codegen::settings::Configurable;
 use cranelift::codegen::{ir::{types, InstBuilder, Type, Value}, settings};
 use cranelift::frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
-use cranelift::module::Module;
 use cranelift::object::{ObjectBuilder, ObjectModule};
 use cranelift::prelude::EntityRef;
 
@@ -47,6 +47,7 @@ pub struct IRGenerator {
     pub cranelift_signedness_map: HashMap<String, Signedness>,
     pub module: ObjectModule,
 	pub builder_ctx: FunctionBuilderContext,
+	pub functions: HashMap<String, Function>,
 }
 
 impl IRGenerator {
@@ -89,37 +90,126 @@ impl IRGenerator {
 
 		let builder_ctx = FunctionBuilderContext::new();
 
-        Self { ast, gst, cranelift_var_map, cranelift_signedness_map, module, builder_ctx }
+        Self { ast, gst, cranelift_var_map, cranelift_signedness_map, module, builder_ctx, functions: HashMap::new() }
     }
 
     pub fn generate(&mut self) {
         println!("using cranelift version {}", cranelift::frontend::VERSION);
-
-		let mut sig = self.module.make_signature();
 
         if !self.gst.contains("старт") {
             eeprintln!("програма має мати функцію старт()");
             std::process::exit(-1);
         }
 
-        let mut func: Option<(String, Vec<Statements>, FunctionBuilder)> = None;
+		let func_data: Vec<(String, Vec<Statements>)> = self.ast.iter()
+			.filter_map(|stmt| {
+				if let Statements::Func(id, statements) = stmt {
+					self.functions.insert(id.clone(), Function::new());
+					Some((id.clone(), statements.clone()))
+				} else {
+					None
+				}
+			})
+			.collect();
 
-		println!("{:#?}", self.ast.clone());
-        // for stmt in self.ast.clone() {
-            // match stmt {
-                // Statements::Func(id, statements) => {
-					// let new_func = Function::new();
-					// let func_builder = FunctionBuilder::new(&mut new_func, &mut self.builder_ctx);
-//
-                    // func = Some((id, statements, func_builder));
-                // },
-                // Statements::Let(id, expr) => {
-                    // self.gen_expr(*expr, builder);
-                // },
-                // _ => {}
-            // }
-        // }
+		for (id, stmts) in func_data {
+			self.gen_func(id, stmts);
+		}
     }
+
+	pub fn gen_func(&mut self, id: String, stmts: Vec<Statements>) {
+		let mut builder_ctx = std::mem::take(&mut self.builder_ctx);
+
+		let mut func = self.functions.remove(&id).unwrap();
+		let mut func_builder = FunctionBuilder::new(&mut func, &mut builder_ctx);
+
+		let entry_block = func_builder.create_block();
+		func_builder.switch_to_block(entry_block);
+		func_builder.seal_block(entry_block);
+
+		for stmt in stmts {
+			if let Statements::Let(var_id, expr) = stmt {
+				self.gen_let(var_id, expr, &mut func_builder);
+			} else if let Statements::Assign(var_id, expr) = stmt {
+				self.gen_assign(var_id, expr, &mut func_builder);
+			}
+		}
+
+		func_builder.finalize();
+
+		self.functions.insert(id.clone(), func);
+
+		self.builder_ctx = builder_ctx;
+	}
+
+	pub fn gen_let(&mut self, var_id: String, expr: Box<Expr>, mut func_builder: &mut FunctionBuilder<'_>) {
+		let expr = *expr;
+		let (val, _signedness) = self.gen_expr(expr.clone(), &mut func_builder);
+
+		let ty = self.type_to_cranelift_type(expr, &mut func_builder);
+		let new_var = func_builder.declare_var(ty);
+
+		func_builder.def_var(new_var, val);
+
+		self.cranelift_var_map.insert(var_id, new_var.as_u32() as usize);
+	}
+
+	pub fn gen_assign(&self, var_id: String, expr: Box<Expr>, mut func_builder: &mut FunctionBuilder<'_>) {
+		let var = self.cranelift_var_map.get(&var_id);
+
+		let (val, _signedness) = self.gen_expr(*expr.clone(), &mut func_builder);
+
+		if let Some(var) = var {
+			let variable = Variable::new(*var);
+			func_builder.def_var(variable, val);
+		} else {
+			eeprintln!("Змінна {} не задеклерована", var_id);
+			std::process::exit(-1);
+		}
+	}
+
+	pub fn type_to_cranelift_type(&self, ty: Expr, func_builder: &mut FunctionBuilder<'_>) -> Type {
+		match ty {
+            Expr::U64(_) => {
+				types::I64
+			},
+            Expr::F64(_) => {
+				types::F64
+			},
+            Expr::I64(_) => {
+				types::I64
+			},
+            Expr::Str(_) => {
+				unimplemented!()
+			},
+            Expr::Bool(_) => {
+				types::I8
+			},
+            Expr::Id(id) => {
+				let var_index = self.cranelift_var_map.get(&id);
+
+				if let Some(var_index) = var_index {
+					let var = Variable::new(*var_index);
+					let val = func_builder.use_var(var);
+					func_builder.func.dfg.value_type(val)
+				} else {
+					eeprintln!("Змінна {} не задеклерована", id);
+					std::process::exit(-1);
+				}
+			},
+            Expr::BinOp(_left, op, _right) => {
+				match op {
+					// result of addition is type of f64 (for now)
+					// result of subtraction is type of f64 (for now)
+					// result of multiplication is type of f64 (for now)
+					// result of division is type of f64 (for now)
+					BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => types::F64,
+					// result of == is a boolean (byte)
+					BinOp::EqEq => types::I8,
+				}
+            },
+		}
+	}
 
     pub fn gen_expr(&self, expr: Expr, builder: &mut FunctionBuilder) -> (Value, Signedness) {
         match expr {
@@ -132,7 +222,7 @@ impl IRGenerator {
             Expr::I64(val) => {
                 (builder.ins().iconst(types::I64, val as i64), Signedness::Signed)
 			},
-            Expr::Str(val) => {
+            Expr::Str(_val) => {
                 unimplemented!();
 			},
             Expr::Bool(val) => {
