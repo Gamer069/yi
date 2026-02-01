@@ -204,8 +204,8 @@ impl Parser {
 			},
 			Some(Tok::Id(id)) => {
 				let id_clone = id.clone();
-                self.eat();
-                Expr::Id(id_clone)
+				self.eat();
+				Expr::Id(id_clone)
 			},
 			Some(Tok::Str(s)) => {
 				let s_clone = s.clone();
@@ -279,12 +279,12 @@ impl Parser {
 				Tok::Id(id) => {
 					self.eat();
 
-                    if self.cur_non_spanned() == Some(Tok::Lp) {
-                        // TODO: args
-                        self.eat();
-                        self.eat_tok(Tok::Rp);
-                        statements.push(Statements::Expr(Box::new(Expr::Call(id.clone()))));
-                    }
+					if self.cur_non_spanned() == Some(Tok::Lp) {
+						// TODO: args
+						self.eat();
+						self.eat_tok(Tok::Rp);
+						statements.push(Statements::Expr(Box::new(Expr::Call(id.clone()))));
+					}
 
 					if let Some(tok) = self.cur() && let Tok::Eq = tok.tok {
 						self.eat();
