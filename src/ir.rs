@@ -12,6 +12,7 @@ use cranelift::module::{FuncId, Linkage, Module};
 use cranelift::object::{ObjectBuilder, ObjectModule};
 use cranelift::prelude::{AbiParam, EntityRef};
 
+use crate::keywords;
 use crate::{parser::{BinOp, Expr, Statements}, sym_table::SymTable};
 
 macro_rules! eeprintln {
@@ -93,6 +94,7 @@ impl IRGenerator {
 	pub fn translate_std_func_name<'a>(yi_name: &'a str) -> &'a str {
 		match yi_name {
 			"друклн" => "drukln",
+			"друклн_і64" => "drukln_i64",
 			"старт" => "main",
 			_ => yi_name, // fallback to original if not in map
 		}
@@ -102,18 +104,30 @@ impl IRGenerator {
 	pub fn add_std_functions(&mut self) {
 		let module = self.module.as_mut().expect("Module not initialized");
 
-		let mut sig = module.make_signature();
+		let mut println_sig = module.make_signature();
 		// TODO: come back to this when args will be added!
-		// sig.params.push(AbiParam::new(types::I64));
-		sig.returns.push(AbiParam::new(types::I32)); // or void
+		println_sig.returns.push(AbiParam::new(types::I32)); // or void
 
 		let println_name = Self::translate_std_func_name("друклн");
 
 		let println_id = module
-			.declare_function(println_name, Linkage::Import, &sig)
+			.declare_function(println_name, Linkage::Import, &println_sig)
 			.expect("Failed to declare друклн");
 
 		self.functions_to_id.insert(println_name.to_string(), println_id);
+
+		let mut println_i64_sig = module.make_signature();
+
+		println_i64_sig.params.push(AbiParam::new(types::I64)); // or void
+		println_i64_sig.returns.push(AbiParam::new(types::I32)); // or void
+
+		let println_i64_name = Self::translate_std_func_name("друклн_і64");
+
+		let println_i64_id = module
+			.declare_function(println_i64_name, Linkage::Import, &println_i64_sig)
+			.expect("Failed to declare друклн_і64");
+
+		self.functions_to_id.insert(println_i64_name.to_string(), println_i64_id);
 	}
 
 	pub fn generate(&mut self) {
@@ -126,33 +140,44 @@ impl IRGenerator {
 
 		self.add_std_functions();
 
-		let func_data: Vec<(String, Vec<Statements>)> = self.ast.iter()
-			.filter_map(|stmt| {
-				if let Statements::Func(id, statements) = stmt {
-					self.functions.insert(id.clone(), Function::new());
-					Some((id.clone(), statements.clone()))
-				} else {
-					None
+		// PRINTIN' TIME!
+		for stmt in &self.ast {
+			if let Statements::Func(id, args, ret_ty, _) = stmt {
+				let mut sig = self.module.as_mut().unwrap().make_signature();
+				for (_arg_id, arg_ty) in args {
+					sig.params.push(AbiParam::new(arg_ty.cranelift()));
 				}
-			})
-			.collect();
+				if *ret_ty != keywords::TypeKw::Void {
+					sig.returns.push(AbiParam::new(ret_ty.cranelift()));
+				}
 
-		for (id, stmts) in func_data {
-			self.gen_func(id, stmts);
+				// Map "старт" to "main" for linking
+				let link_name = if id == "старт" { "main" } else { &id };
+
+				let func_id = self.module.as_mut().unwrap()
+					.declare_function(link_name, Linkage::Export, &sig)
+					.expect("Failed to declare user function");
+
+				self.functions_to_id.insert(id.clone(), func_id); // keep original name for calls
+				self.functions.insert(id.clone(), Function::new());
+			}
 		}
 
-		// PRINTIN' TIME!
+		for stmt in self.ast.clone() {
+			if let Statements::Func(id, args, ret_ty, stmts) = stmt {
+				self.gen_func(id.clone(), args.clone(), ret_ty.clone(), stmts.clone());
+			}
+		}
+
 		let mut module = self.module.take().expect("Module missing");
 
-		// TODO: error handling
-		for (func_id, func) in self.functions.clone() {
-			let new_func_id = if func_id == "старт" { "main" } else { &func_id };
-			let func_id = module.declare_function(new_func_id, Linkage::Export, &func.signature).expect("Failed to declare function");
-			let mut ctx = Context::for_function(func.clone());
-			ctx.func = func;  // your Cranelift Function
-			module.define_function(func_id, &mut ctx).expect("Failed to define function");
 
-			self.functions_to_id.insert(new_func_id.to_string(), func_id);
+		for (func_name, func) in &self.functions {
+			let func_id = *self.functions_to_id.get(func_name).unwrap();
+			let mut ctx = Context::for_function(func.clone());
+			ctx.func = func.clone();
+			module.define_function(func_id, &mut ctx)
+				.expect(&format!("Failed to define function `{}`", func_name));
 		}
 
 		let product = module.finish();
@@ -176,26 +201,48 @@ impl IRGenerator {
 		let _ = std::fs::remove_file("output.o");
 	}
 
-	pub fn gen_func(&mut self, id: String, stmts: Vec<Statements>) {
+	pub fn gen_func(&mut self, id: String, args: Vec<(String, keywords::TypeKw)>, ret_ty: keywords::TypeKw, stmts: Vec<Statements>) {
 		let mut builder_ctx = std::mem::take(&mut self.builder_ctx);
 
 		let mut func = self.functions.remove(&id).unwrap();
+
+		if ret_ty != keywords::TypeKw::Void {
+			func.signature.returns.push(AbiParam::new(ret_ty.cranelift()));
+		}
+
+		for (_arg_id, arg_ty) in args {
+			// TODO: debug info
+			func.signature.params.push(AbiParam::new(arg_ty.cranelift()));
+		}
+
 		let mut func_builder = FunctionBuilder::new(&mut func, &mut builder_ctx);
 
 		let entry_block = func_builder.create_block();
 		func_builder.switch_to_block(entry_block);
 
+		let mut terminated = false;
+
 		for stmt in stmts {
+			if terminated {
+				continue;
+			}
+
 			if let Statements::Let(var_id, expr) = stmt {
 				self.gen_let(var_id, expr, &mut func_builder);
 			} else if let Statements::Assign(var_id, expr) = stmt {
 				self.gen_assign(var_id, expr, &mut func_builder);
 			} else if let Statements::Expr(expr) = stmt {
 				self.gen_expr(*expr, &mut func_builder);
+			} else if let Statements::Return(expr) = stmt {
+				let (val, _signedness) = self.gen_expr(*expr, &mut func_builder);
+				func_builder.ins().return_(&[val]);
+				terminated = true;
 			}
 		}
 
-		func_builder.ins().return_(&[]);
+		if !terminated {
+			func_builder.ins().return_(&[]);
+		}
 
 		func_builder.seal_block(entry_block);
 
@@ -232,7 +279,7 @@ impl IRGenerator {
 		}
 	}
 
-	pub fn gen_expr(&mut self, expr: Expr, builder: &mut FunctionBuilder) -> (Value, Signedness) {
+	pub fn gen_expr(&mut self, expr: Expr, mut builder: &mut FunctionBuilder) -> (Value, Signedness) {
 		match expr {
 			Expr::U64(val) => {
 				(builder.ins().iconst(types::I64, val as i64), Signedness::Unsigned)
@@ -262,23 +309,31 @@ impl IRGenerator {
 					std::process::exit(-1);
 				}
 			},
-			Expr::Call(id) => {
+			Expr::Call(id, args) => {
 				let actual_name = Self::translate_std_func_name(&id);
 				let module = self.module.as_mut();
-				let func_id = self.functions_to_id.get(actual_name).unwrap();
 
-				let func_ref = module.unwrap().declare_func_in_func(func_id.clone(), &mut builder.func);
+				let func_id = self.functions_to_id.get(actual_name);
 
-				let call_inst = builder.ins().call(func_ref, &[]);
-				let res = builder.inst_results(call_inst);
+				if let Some(func_id) = func_id {
+					let func_ref = module.unwrap().declare_func_in_func(func_id.clone(), &mut builder.func);
 
-				if res.len() > 0 {
-					(res[0], Signedness::Signed)
-				} else {
-					// Void function - return dummy value
-					(builder.ins().iconst(types::I32, 0), Signedness::Signed)
+					let val_args = args.iter().map(|arg| self.gen_expr(arg.clone(), &mut builder));
+					let val_args_pure: Vec<_> = val_args.map(|arg| arg.0).collect();
+
+					let call_inst = builder.ins().call(func_ref, &val_args_pure);
+					let res = builder.inst_results(call_inst);
+
+					if res.len() > 0 {
+						return (res[0], Signedness::Signed)
+					} else {
+						// Void function - return dummy value
+						return (builder.ins().iconst(types::I32, 0), Signedness::Signed)
+					}
 				}
 
+				eeprintln!("Функція `{}` не-задеклерована", actual_name);
+				std::process::exit(-1);
 			}
 			Expr::BinOp(left, op, right) => {
 				let (left_val, left_signedness) = self.gen_expr(*left, builder);

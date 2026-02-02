@@ -20,15 +20,6 @@ impl Lexer {
 		Self { code: codestring }
 	}
 
-	fn is_ident_start(c: char) -> bool {
-		c == '_' || ('\u{0400}' <= c && c <= '\u{04FF}')
-	}
-
-	fn is_ident_continue(c: char) -> bool {
-		Self::is_ident_start(c) || c.is_ascii_digit()
-	}
-
-
 	pub fn lex(&self) -> (Vec<SpannedTok>, Vec<String>) {
 		let mut toks: Vec<SpannedTok> = Vec::new();
 		let mut chars = self.code.chars().peekable();
@@ -48,12 +39,16 @@ impl Lexer {
 
 			if !is_comment {
 				match c {
-					c if Self::is_ident_start(c) => {
+					'A'..='z' => {
+						eeprintln!("Англійський тут не працює");
+						std::process::exit(-1);
+					},
+					c if unicode_ident::is_xid_start(c) => {
 						let mut id = String::new();
 						id.push(c);
 
 						while let Some(&next) = chars.peek() {
-							if Self::is_ident_continue(next) {
+							if unicode_ident::is_xid_continue(next) {
 								id.push(chars.next().unwrap());
 								col += 1;
 							} else {
@@ -62,10 +57,6 @@ impl Lexer {
 						}
 
 						keywords::keywords(&mut toks, id, line, col);
-					},
-					'A'..='z' => {
-						eeprintln!("Англійський тут не працює");
-						std::process::exit(-1);
 					},
 					'=' => {
 						match chars.peek() {
@@ -77,6 +68,12 @@ impl Lexer {
 								toks.push(Tok::Eq.to_spanned(line, col));
 							}
 						}
+					},
+					',' => {
+						toks.push(Tok::Comma.to_spanned(line, col));
+					},
+					':' => {
+						toks.push(Tok::Colon.to_spanned(line, col));
 					},
 					';' => {
 						toks.push(Tok::Sc.to_spanned(line, col));
@@ -90,6 +87,11 @@ impl Lexer {
 							let peekedchar = *peeked.unwrap();
 							if '0' <= peekedchar && peekedchar <= '9' {
 								self.lex_num(true, c, &mut chars, &mut toks, line, &mut col);
+							} else if peekedchar == '>' {
+								chars.next();
+								col += 1;
+
+								toks.push(Tok::Arrow.to_spanned(line, col));
 							} else {
 								toks.push(Tok::Sub.to_spanned(line, col));
 							}
@@ -122,18 +124,18 @@ impl Lexer {
 						toks.push(Tok::Rc.to_spanned(line, col));
 					},
 					'"' => {
-						let mut str: String = String::new();
+						let mut s: String = String::new();
 						let mut chars_iter = chars.clone();
 						while let Some(peeked_char) = chars_iter.peek() {
 							if *peeked_char != '"' {
-								str.push(chars_iter.next().unwrap());
+								s.push(chars_iter.next().unwrap());
 								chars = chars_iter.clone();
 							} else {
 								chars.next();
 								break;
 							}
 						}
-						toks.push(Tok::Str(str).to_spanned(line, col));
+						toks.push(Tok::Val(keywords::TypeKwWithVal::Str(s)).to_spanned(line, col));
 					},
 					'0'..='9' => {
 						self.lex_num(false, c, &mut chars, &mut toks, line, &mut col);
@@ -177,12 +179,12 @@ impl Lexer {
 		}
 
 		if num.contains('.') {
-			toks.push(Tok::F64(num.parse::<f64>().unwrap()).to_spanned(line, *col));
+			toks.push(Tok::Val(keywords::TypeKwWithVal::F64(num.parse::<f64>().unwrap())).to_spanned(line, *col));
 		} else {
 			if neg {
-				toks.push(Tok::I64(num.parse::<i64>().unwrap()).to_spanned(line, *col));
+				toks.push(Tok::Val(keywords::TypeKwWithVal::I64(num.parse::<i64>().unwrap())).to_spanned(line, *col));
 			} else {
-				toks.push(Tok::U64(num.parse::<u64>().unwrap()).to_spanned(line, *col));
+				toks.push(Tok::Val(keywords::TypeKwWithVal::U64(num.parse::<u64>().unwrap())).to_spanned(line, *col));
 			}
 		}
 	}

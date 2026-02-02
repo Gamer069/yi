@@ -1,15 +1,18 @@
 use std::fmt;
 
+use crate::keywords;
+
 #[derive(PartialEq, Debug, Clone)]
 pub enum Tok {
 	Func,
 	Let,
+	Return,
 	Id(String),
-	I64(i64),
-	U64(u64),
-	F64(f64),
-	Str(String),
-	Bool(bool),
+	Type(keywords::TypeKw),
+	Val(keywords::TypeKwWithVal),
+	Arrow,
+	Colon,
+	Comma,
 	Add,
 	Sub,
 	Mul,
@@ -34,12 +37,17 @@ impl fmt::Display for Tok {
 		match self {
 			Tok::Let => write!(f, "let"),
 			Tok::Func => write!(f, "func"),
+			Tok::Return => write!(f, "return"),
 			Tok::Id(s) => write!(f, "Id({})", s),
-			Tok::U64(n) => write!(f, "u64({})", n),
-			Tok::I64(n) => write!(f, "i64({})", n),
-			Tok::F64(float) => write!(f, "f64({})", float),
-			Tok::Str(s) => write!(f, "\"{}\"", s),
-			Tok::Bool(b) => write!(f, "{}", b),
+			Tok::Type(t) => write!(f, "Type({})", t),
+			Tok::Val(ty) => match ty {
+				keywords::TypeKwWithVal::I64(v) => write!(f, "I64({})", v),
+				keywords::TypeKwWithVal::U64(v) => write!(f, "U64({})", v),
+				keywords::TypeKwWithVal::F64(v) => write!(f, "F64({})", v),
+				keywords::TypeKwWithVal::Str(v) => write!(f, "Str({})", v),
+				keywords::TypeKwWithVal::Bool(v) => write!(f, "Bool({})", v),
+				keywords::TypeKwWithVal::Void(()) => write!(f, "Void"),
+			},
 			Tok::Add => write!(f, "+"),
 			Tok::Sub => write!(f, "-"),
 			Tok::Mul => write!(f, "*"),
@@ -51,6 +59,9 @@ impl fmt::Display for Tok {
 			Tok::Sc => write!(f, ";"),
 			Tok::Lc => write!(f, "{{"),
 			Tok::Rc => write!(f, "}}"),
+			Tok::Arrow => write!(f, "->"),
+			Tok::Colon => write!(f, ":"),
+			Tok::Comma => write!(f, ","),
 		}
 	}
 }

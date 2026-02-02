@@ -1,11 +1,111 @@
-use crate::tok::{SpannedTok, Tok};
+use std::str::FromStr;
+
+use crate::{keywords, tok::{SpannedTok, Tok}};
+
+macro_rules! enum_str {
+    // with optional `pub`
+    ($(#[$meta:meta])* $vis:vis $name:ident { $($variant:ident => $str:expr),* $(,)? }) => {
+        $(#[$meta])*
+        $vis enum $name {
+            $($variant),*
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    $(Self::$variant => write!(f, $str)),*
+                }
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = String;
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                match s {
+                    $($str => Ok(Self::$variant)),*,
+                    _ => Err(format!("Unknown {}: {}", stringify!($name), s))
+                }
+            }
+        }
+    };
+}
+
+macro_rules! enum_str_with_data {
+    ($(#[$meta:meta])* $vis:vis $name:ident { $($variant:ident($ty:ty) => $str:expr),* $(,)? }) => {
+        $(#[$meta])*
+        $vis enum $name {
+            $($variant($ty)),*
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    $(Self::$variant(_) => write!(f, $str)),*
+                }
+            }
+        }
+    };
+}
 
 pub fn keywords(toks: &mut Vec<SpannedTok>, id: String, line: usize, col: usize) {
+	let ty = TypeKw::from_str(id.as_str());
+
+	if let Ok(ty) = ty {
+		toks.push(Tok::Type(ty).to_spanned(line, col));
+		return;
+	}
+
 	match id.as_str() {
-		"так" => toks.push(Tok::Bool(true).to_spanned(line, col)),
-		"ні" => toks.push(Tok::Bool(false).to_spanned(line, col)),
+		"так" => toks.push(Tok::Val(keywords::TypeKwWithVal::Bool(true)).to_spanned(line, col)),
+		"ні" => toks.push(Tok::Val(keywords::TypeKwWithVal::Bool(false)).to_spanned(line, col)),
+
 		"змінна" => toks.push(Tok::Let.to_spanned(line, col)),
 		"функ" => toks.push(Tok::Func.to_spanned(line, col)),
+
+		"верни" => toks.push(Tok::Return.to_spanned(line, col)),
+
 		_ => toks.push(Tok::Id(id).to_spanned(line, col))
 	}
+}
+
+enum_str! {
+	#[derive(PartialEq, Debug, Clone)]
+    pub TypeKw {
+		I64 => "і64",
+		// TODO: change later - ю,ф don't really make sense here
+		U64 => "ю64",
+		F64 => "ф64",
+
+		Str => "str",
+		Bool => "бул",
+
+		Void => "ніщо",
+    }
+}
+
+impl TypeKw {
+	pub fn cranelift(&self) -> cranelift::prelude::Type {
+		match self {
+			TypeKw::I64 => cranelift::prelude::types::I64,
+			TypeKw::U64 => cranelift::prelude::types::I64,
+			TypeKw::F64 => cranelift::prelude::types::F64,
+			TypeKw::Str => unimplemented!(),
+			TypeKw::Bool => cranelift::prelude::types::I8,
+			TypeKw::Void => cranelift::prelude::types::I32,
+		}
+	}
+}
+
+enum_str_with_data! {
+	#[derive(PartialEq, Debug, Clone)]
+    pub TypeKwWithVal {
+		I64(i64) => "і64",
+		// TODO: change later - ю,ф don't really make sense here
+		U64(u64) => "ю64",
+		F64(f64) => "ф64",
+
+		Str(String) => "str",
+		Bool(bool) => "бул",
+		Void(()) => "ніщо",
+    }
 }

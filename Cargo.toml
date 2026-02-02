@@ -7,3 +7,4 @@ edition="2024"
 clap = { version = "4.5.31", features = ["derive"] }
 
 cranelift = { version = "0.128.1", features = ["object", "module", "native"] }
+unicode-ident = "1.0.22"

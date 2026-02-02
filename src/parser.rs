@@ -1,6 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
+use crate::keywords::TypeKw;
 use crate::sym_table::SymTable;
-use crate::tok::*;
+use crate::{keywords, tok::*};
 
 type AST = Vec<Statements>;
 
@@ -173,17 +174,17 @@ impl Parser {
 		let cur = self.cur_non_spanned();
 
 		match cur {
-			Some(Tok::I64(num)) => {
+			Some(Tok::Val(keywords::TypeKwWithVal::I64(num))) => {
 				let value = num;
 				self.eat();
 				Expr::I64(value)
 			},
-			Some(Tok::U64(num)) => {
+			Some(Tok::Val(keywords::TypeKwWithVal::U64(num))) => {
 				let value = num;
 				self.eat();
 				Expr::U64(value)
 			},
-			Some(Tok::F64(num)) => {
+			Some(Tok::Val(keywords::TypeKwWithVal::F64(num))) => {
 				let value = num;
 				self.eat();
 				Expr::F64(value)
@@ -205,14 +206,37 @@ impl Parser {
 			Some(Tok::Id(id)) => {
 				let id_clone = id.clone();
 				self.eat();
-				Expr::Id(id_clone)
+
+				if self.cur_non_spanned() == Some(Tok::Lp) {
+					self.eat();
+
+					let mut args = vec![];
+
+					if self.cur_non_spanned() != Some(Tok::Rp) {
+						loop {
+							let expr = self.parse_expr();
+							args.push(expr);
+
+							if self.cur_non_spanned() == Some(Tok::Comma) {
+								self.eat();
+							} else {
+								break;
+							}
+						}
+					}
+
+					self.eat_tok(Tok::Rp);
+					Expr::Call(id_clone, args)
+				} else {
+					Expr::Id(id_clone)
+				}
 			},
-			Some(Tok::Str(s)) => {
+			Some(Tok::Val(keywords::TypeKwWithVal::Str(s))) => {
 				let s_clone = s.clone();
 				self.eat();
 				Expr::Str(s_clone)
 			},
-			Some(Tok::Bool(val)) => {
+			Some(Tok::Val(keywords::TypeKwWithVal::Bool(val))) => {
 				self.eat();
 				Expr::Bool(val)
 			},
@@ -248,8 +272,37 @@ impl Parser {
 		self.eat_tok(Tok::Func);
 		let id = self.parse_id();
 		self.eat_tok(Tok::Lp);
-		// TODO: args
+
+		// // TODO: args
+		let mut args = vec![];
+
+		if self.cur_non_spanned() != Some(Tok::Rp) {
+			loop {
+				let id = self.eat_tok_var(Tok::Id("".to_string()), |tok| if let Tok::Id(id) = tok { Some(id.clone()) } else { None });
+
+				self.eat_tok(Tok::Colon);
+
+				let ty = self.eat_tok_var(Tok::Type(TypeKw::I64), |tok| if let Tok::Type(t) = tok { Some(t.clone()) } else { None });
+
+				args.push((id, ty));
+
+				if self.cur_non_spanned() == Some(Tok::Comma) {
+					self.eat();  // eat comma
+				} else {
+					break;  // no more args
+				}
+			}
+		}
+
 		self.eat_tok(Tok::Rp);
+
+		let ret_ty = if let Some(_) = self.opt_tok(Tok::Arrow) {
+			// dummy val
+			self.eat_tok_var(Tok::Type(TypeKw::I64), |tok| if let Tok::Type(t) = tok { Some(t.clone()) } else { None })
+		} else {
+			TypeKw::Void
+		};
+
 		self.eat_tok(Tok::Lc);
 
 		let mut statements: AST = Vec::new();
@@ -280,16 +333,42 @@ impl Parser {
 					self.eat();
 
 					if self.cur_non_spanned() == Some(Tok::Lp) {
-						// TODO: args
 						self.eat();
+
+						// // TODO: args
+						let mut args = vec![];
+
+						if self.cur_non_spanned() != Some(Tok::Rp) {
+							loop {
+								let expr = self.parse_expr();
+								args.push(expr);
+
+								if self.cur_non_spanned() == Some(Tok::Comma) {
+									self.eat();
+								} else {
+									break;
+								}
+							}
+						}
+
 						self.eat_tok(Tok::Rp);
-						statements.push(Statements::Expr(Box::new(Expr::Call(id.clone()))));
+						statements.push(Statements::Expr(Box::new(Expr::Call(id.clone(), args))));
 					}
 
 					if let Some(tok) = self.cur() && let Tok::Eq = tok.tok {
 						self.eat();
 						let expr = self.parse_expr();
 						self.cur_scope.borrow_mut().set(&id, Symbol::Variable(expr)).expect("Failed to assign to variable");
+					}
+				},
+				Tok::Return => {
+					self.eat();
+
+					let expr = self.parse_expr();
+					statements.push(Statements::Return(Box::new(expr)));
+
+					if let Some(tok) = self.cur() && let Tok::Sc = tok.tok {
+						self.eat();
 					}
 				},
 				_ => {
@@ -306,14 +385,14 @@ impl Parser {
 		self.sym_table.borrow_mut().put(&id, Symbol::Function(statements.clone(), self.cur_scope.clone()));
 
 		self.cur_scope = prev_scope;
-		
+
 		// TODO: use a smarter way to determine current scope globalness - nested functions will
 		// in-fact exist
 		self.cur_scope_is_global = true;
 
 		self.eat_tok(Tok::Rc);
 
-		Statements::Func(id, statements)
+		Statements::Func(id, args, ret_ty, statements)
 	}
 
 	fn parse_id(&mut self) -> String {
@@ -338,6 +417,16 @@ impl Parser {
 		tok
 	}
 
+	fn opt_tok(&mut self, expected_tok: Tok) -> Option<SpannedTok> {
+		if let Some(cur_tok) = self.cur() {
+			if std::mem::discriminant(&cur_tok.tok) == std::mem::discriminant(&expected_tok) {
+				self.eat();
+				return self.tokens.get(self.i - 1).cloned();
+			}
+		}
+		None
+	}
+
 	fn eat_tok(&mut self, expected_tok: Tok) {
 		if let Some(cur_tok) = self.cur() {
 			// Use discriminant comparison instead of direct equality
@@ -348,6 +437,22 @@ impl Parser {
 				tok_err!(expected_tok, cur_tok, self.lines[cur_tok.line-1]);
 				std::process::exit(-1);
 			}
+		} else {
+			tok_err_end!(expected_tok);
+			std::process::exit(-1);
+		}
+	}
+
+	fn eat_tok_var<T>(&mut self, expected_tok: Tok, extractor: impl FnOnce(&Tok) -> Option<T>) -> T {
+		if let Some(cur_tok) = self.cur() {
+			if std::mem::discriminant(&cur_tok.tok) == std::mem::discriminant(&expected_tok) {
+				if let Some(value) = extractor(&cur_tok.tok) {
+					self.eat();
+					return value;
+				}
+			}
+			tok_err!(expected_tok, cur_tok, self.lines[cur_tok.line-1]);
+			std::process::exit(-1);
 		} else {
 			tok_err_end!(expected_tok);
 			std::process::exit(-1);
@@ -379,7 +484,7 @@ pub enum Expr {
 	Str(String),
 	Bool(bool),
 	Id(String),
-	Call(String),
+	Call(String, Vec<Expr>),
 	BinOp(Box<Expr>, BinOp, Box<Expr>),
 }
 
@@ -387,6 +492,7 @@ pub enum Expr {
 pub enum Statements {
 	Let(String, Box<Expr>),
 	Assign(String, Box<Expr>),
-	Func(String, Vec<Statements>),
+	Func(String, Vec<(String, keywords::TypeKw)>, keywords::TypeKw, Vec<Statements>),
 	Expr(Box<Expr>),
+	Return(Box<Expr>),
 }
