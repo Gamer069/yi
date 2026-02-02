@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use crate::{keywords, tok::{SpannedTok, Tok}};
+use crate::{ir::Signedness, keywords, tok::{SpannedTok, Tok}};
 
 macro_rules! enum_str {
     // with optional `pub`
@@ -92,6 +92,20 @@ impl TypeKw {
 			TypeKw::Str => unimplemented!(),
 			TypeKw::Bool => cranelift::prelude::types::I8,
 			TypeKw::Void => cranelift::prelude::types::I32,
+		}
+	}
+
+	pub fn signedness(&self) -> Signedness {
+		match self {
+			TypeKw::I64 => Signedness::Signed,
+			TypeKw::U64 => Signedness::Unsigned,
+			// doesn't make any sense but idc anyway
+			TypeKw::F64 => Signedness::Signed,
+			// doesn't make any sense but idrc
+			TypeKw::Str => Signedness::Unsigned,
+			// doesn't make any sense but idc
+			TypeKw::Bool => Signedness::Unsigned,
+			TypeKw::Void => Signedness::Unsigned,
 		}
 	}
 }

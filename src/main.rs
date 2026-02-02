@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![feature(fn_traits)]
 
 mod lexer;
 mod tok;

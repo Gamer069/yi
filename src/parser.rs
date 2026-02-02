@@ -312,6 +312,12 @@ impl Parser {
 		self.cur_scope = func_scope.clone();
 		self.cur_scope_is_global = false;
 
+		for (name, _ty) in args.clone() {
+			let val = Symbol::Variable(Expr::Arg(name.clone()));
+
+			self.cur_scope.borrow_mut().put(&name, val);
+		}
+
 		while let Some(cur) = self.cur() {
 			match cur.tok {
 				Tok::Rc => {
@@ -485,6 +491,7 @@ pub enum Expr {
 	Bool(bool),
 	Id(String),
 	Call(String, Vec<Expr>),
+	Arg(String),
 	BinOp(Box<Expr>, BinOp, Box<Expr>),
 }
 

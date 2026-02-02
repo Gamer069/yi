@@ -8,9 +8,9 @@ use cranelift::codegen::ir::Function;
 use cranelift::codegen::settings::Configurable;
 use cranelift::codegen::{ir::{types, InstBuilder, Type, Value}, settings};
 use cranelift::frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
-use cranelift::module::{FuncId, Linkage, Module};
+use cranelift::module::{DataDescription, FuncId, Linkage, Module};
 use cranelift::object::{ObjectBuilder, ObjectModule};
-use cranelift::prelude::{AbiParam, EntityRef};
+use cranelift::prelude::{AbiParam, EntityRef, Signature};
 
 use crate::keywords;
 use crate::{parser::{BinOp, Expr, Statements}, sym_table::SymTable};
@@ -56,6 +56,8 @@ pub struct IRGenerator {
 	pub builder_ctx: FunctionBuilderContext,
 	pub functions: HashMap<String, Function>,
 	pub functions_to_id: HashMap<String, FuncId>,
+	// lit -> mem
+	pub string_literals: HashMap<String, usize>,
 }
 
 impl IRGenerator {
@@ -88,13 +90,21 @@ impl IRGenerator {
 
 		let builder_ctx = FunctionBuilderContext::new();
 
-		Self { ast, gst, cranelift_var_map, cranelift_signedness_map, module: Some(module), builder_ctx, functions: HashMap::new(), functions_to_id: HashMap::new() }
+		Self { ast, gst, cranelift_var_map, cranelift_signedness_map, module: Some(module), builder_ctx, functions: HashMap::new(), functions_to_id: HashMap::new(), string_literals: HashMap::new() }
 	}
 
 	pub fn translate_std_func_name<'a>(yi_name: &'a str) -> &'a str {
 		match yi_name {
 			"друклн" => "drukln",
 			"друклн_і64" => "drukln_i64",
+			"друклн_стр" => "drukln_str",
+
+			"друк" => "druk",
+			"друк_і64" => "druk_i64",
+			"друк_стр" => "druk_str",
+
+			"скинути_вивід" => "skynuty_stdout",
+
 			"старт" => "main",
 			_ => yi_name, // fallback to original if not in map
 		}
@@ -102,32 +112,42 @@ impl IRGenerator {
 
 
 	pub fn add_std_functions(&mut self) {
+		self.add_std_function("друклн", &mut |sig: &mut Signature| Self::void(sig));
+		self.add_std_function("друклн_і64", &mut |sig: &mut Signature| Self::arg_and(sig, types::I64, &mut Self::void));
+		self.add_std_function("друклн_стр", &mut |sig: &mut Signature| Self::arg_and(sig, types::I64, &mut Self::void));
+		self.add_std_function("друк", &mut |sig: &mut Signature| Self::void(sig));
+		self.add_std_function("друк_і64", &mut |sig: &mut Signature| Self::arg_and(sig, types::I64, &mut Self::void));
+		self.add_std_function("друк_стр", &mut |sig: &mut Signature| Self::arg_and(sig, types::I64, &mut Self::void));
+		self.add_std_function("скинути_вивід", &mut |sig: &mut Signature| Self::void(sig));
+	}
+
+	pub fn void(sig: &mut Signature) {
+		sig.returns.push(AbiParam::new(types::I32));
+	}
+
+	pub fn arg(sig: &mut Signature, ty: Type) {
+		sig.params.push(AbiParam::new(ty));
+	}
+
+	pub fn arg_and(sig: &mut Signature, ty: Type, modifier: &mut dyn FnMut(&mut Signature) -> ()) {
+		sig.params.push(AbiParam::new(ty));
+		modifier(sig);
+	}
+
+	pub fn add_std_function(&mut self, name: &str, sig_initializer: &mut dyn FnMut(&mut Signature) -> ()) {
 		let module = self.module.as_mut().expect("Module not initialized");
 
-		let mut println_sig = module.make_signature();
-		// TODO: come back to this when args will be added!
-		println_sig.returns.push(AbiParam::new(types::I32)); // or void
+		let mut sig = module.make_signature();
+		sig_initializer(&mut sig);
 
-		let println_name = Self::translate_std_func_name("друклн");
+		let name = Self::translate_std_func_name(name);
 
-		let println_id = module
-			.declare_function(println_name, Linkage::Import, &println_sig)
-			.expect("Failed to declare друклн");
+		let id = module
+			.declare_function(name, Linkage::Import, &sig)
+			.expect(&format!("Failed to declare {}", name));
 
-		self.functions_to_id.insert(println_name.to_string(), println_id);
 
-		let mut println_i64_sig = module.make_signature();
-
-		println_i64_sig.params.push(AbiParam::new(types::I64)); // or void
-		println_i64_sig.returns.push(AbiParam::new(types::I32)); // or void
-
-		let println_i64_name = Self::translate_std_func_name("друклн_і64");
-
-		let println_i64_id = module
-			.declare_function(println_i64_name, Linkage::Import, &println_i64_sig)
-			.expect("Failed to declare друклн_і64");
-
-		self.functions_to_id.insert(println_i64_name.to_string(), println_i64_id);
+		self.functions_to_id.insert(name.to_string(), id);
 	}
 
 	pub fn generate(&mut self) {
@@ -210,15 +230,26 @@ impl IRGenerator {
 			func.signature.returns.push(AbiParam::new(ret_ty.cranelift()));
 		}
 
-		for (_arg_id, arg_ty) in args {
-			// TODO: debug info
-			func.signature.params.push(AbiParam::new(arg_ty.cranelift()));
+		for (_, ty) in &args {
+			let cr_ty = ty.cranelift();
+			func.signature.params.push(AbiParam::new(cr_ty));
 		}
 
 		let mut func_builder = FunctionBuilder::new(&mut func, &mut builder_ctx);
 
 		let entry_block = func_builder.create_block();
+		func_builder.append_block_params_for_function_params(entry_block);
 		func_builder.switch_to_block(entry_block);
+
+		for (i, (arg_name, arg_ty)) in args.iter().enumerate() {
+			// TODO: debug info
+			let cr_ty = arg_ty.cranelift();
+			let var = func_builder.declare_var(cr_ty);
+			let val = func_builder.block_params(entry_block)[i];
+			func_builder.def_var(var, val);
+			self.cranelift_var_map.insert(arg_name.clone(), var.as_u32() as usize);
+			self.cranelift_signedness_map.insert(arg_name.clone(), arg_ty.signedness());
+		}
 
 		let mut terminated = false;
 
@@ -290,8 +321,30 @@ impl IRGenerator {
 			Expr::I64(val) => {
 				(builder.ins().iconst(types::I64, val as i64), Signedness::Signed)
 			},
-			Expr::Str(_val) => {
-				unimplemented!();
+			Expr::Str(val) => {
+				// strings are complicated
+				let module = self.module.as_mut().unwrap();
+
+				let mut bytes = val.clone().into_bytes();
+				bytes.push(0x00);
+
+				let name = format!("str{}", self.string_literals.len());
+				let data_id = module
+					.declare_data(&name, Linkage::Local, false, false)
+					.unwrap();
+
+				let mut data_desc = DataDescription::new();
+				data_desc.define(bytes.into_boxed_slice());
+
+				let _ = module.define_data(data_id, &data_desc).inspect_err(|err| {
+					eeprintln!("Була помилка при визначанні данних для строки: {}", err);
+				});
+
+				self.string_literals.insert(val.clone(), data_id.as_u32() as usize);
+				let data_ref = module.declare_data_in_func(data_id, &mut builder.func);
+				let ptr_val = builder.ins().symbol_value(types::I64, data_ref);
+
+				(ptr_val, Signedness::Signed)
 			},
 			Expr::Bool(val) => {
 				if val {
@@ -349,6 +402,10 @@ impl IRGenerator {
 					std::process::exit(-1);
 				}
 			},
+			Expr::Arg(..) => {
+				eeprintln!("Щось сталось не так - АСД має інвалідний для нього вираз");
+				std::process::exit(-1);
+			}
 		}
 	}
 
