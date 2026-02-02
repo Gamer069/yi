@@ -5,6 +5,7 @@ mod tok;
 mod parser;
 mod ir;
 mod sym_table;
+mod keywords;
 
 use clap::{Parser, Subcommand};
 use std::path::Path;

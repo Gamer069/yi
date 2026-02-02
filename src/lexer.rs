@@ -2,7 +2,7 @@ use std::fs;
 use std::iter::Peekable;
 use std::str::Chars;
 
-use crate::tok::{SpannedTok, Tok};
+use crate::{keywords, tok::{SpannedTok, Tok}};
 
 macro_rules! eeprintln {
 	($($arg:tt)*) => {{
@@ -19,6 +19,15 @@ impl Lexer {
 		let codestring = fs::read_to_string(fname).expect("Failed to read file for some reason...");
 		Self { code: codestring }
 	}
+
+	fn is_ident_start(c: char) -> bool {
+		c == '_' || ('\u{0400}' <= c && c <= '\u{04FF}')
+	}
+
+	fn is_ident_continue(c: char) -> bool {
+		Self::is_ident_start(c) || c.is_ascii_digit()
+	}
+
 
 	pub fn lex(&self) -> (Vec<SpannedTok>, Vec<String>) {
 		let mut toks: Vec<SpannedTok> = Vec::new();
@@ -39,35 +48,20 @@ impl Lexer {
 
 			if !is_comment {
 				match c {
-					c if ('\u{0400}' <= c && c <= '\u{04FF}') || c == '_' => {
-						let mut id: String = String::from(c);
-						let mut chars_iter = chars.clone(); //clone the iterator one time.
-						while let Some(peeked_char) = chars_iter.peek() {
-							if ('\u{0400}' <= *peeked_char && *peeked_char <= '\u{04FF}') || *peeked_char == '_' {
-								id.push(chars_iter.next().unwrap()); //now use next from the clone.
+					c if Self::is_ident_start(c) => {
+						let mut id = String::new();
+						id.push(c);
+
+						while let Some(&next) = chars.peek() {
+							if Self::is_ident_continue(next) {
+								id.push(chars.next().unwrap());
 								col += 1;
-								chars = chars_iter.clone(); //replace the original char iterator with the now advanced clone.
 							} else {
 								break;
 							}
 						}
-						if id == "так" {
-							toks.push(Tok::Bool(true).to_spanned(line, col));
-							continue;
-						}
-						if id == "ні" {
-							toks.push(Tok::Bool(false).to_spanned(line, col));
-							continue;
-						}
-						if id == "змінна" {
-							toks.push(Tok::Let.to_spanned(line, col));
-							continue;
-						}
-						if id == "функ" {
-							toks.push(Tok::Func.to_spanned(line, col));
-							continue;
-						}
-						toks.push(Tok::Id(id).to_spanned(line, col));
+
+						keywords::keywords(&mut toks, id, line, col);
 					},
 					'A'..='z' => {
 						eeprintln!("Англійський тут не працює");
