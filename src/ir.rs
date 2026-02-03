@@ -137,7 +137,7 @@ impl IRGenerator {
 	}
 
 	pub fn add_std_function(&mut self, name: &str, sig_initializer: &mut dyn FnMut(&mut Signature) -> ()) {
-		let module = self.module.as_mut().expect("Module not initialized");
+		let module = self.module.as_mut().expect("Модуль не ініціалізовано");
 
 		let mut sig = module.make_signature();
 		sig_initializer(&mut sig);
@@ -146,7 +146,7 @@ impl IRGenerator {
 
 		let id = module
 			.declare_function(name, Linkage::Import, &sig)
-			.expect(&format!("Failed to declare {}", name));
+			.expect(&format!("Не вийшло задекларувати функцію {}", name));
 
 
 		self.functions_to_id.insert(name.to_string(), id);
@@ -190,7 +190,7 @@ impl IRGenerator {
 
 				let func_id = self.module.as_mut().unwrap()
 					.declare_function(link_name, Linkage::Export, &sig)
-					.expect("Failed to declare user function");
+					.expect("Не вийшло задекларувати функцію");
 
 				self.functions_to_id.insert(id.clone(), func_id); // keep original name for calls
 				self.functions.insert(id.clone(), Function::new());
@@ -207,7 +207,7 @@ impl IRGenerator {
 			}
 		}
 
-		let mut module = self.module.take().expect("Module missing");
+		let mut module = self.module.take().expect("Модуль не наявний");
 
 		if self.verbose {
 			eprintln!("Оголошення {} функцій користувача", self.functions.len());
@@ -218,7 +218,7 @@ impl IRGenerator {
 			let mut ctx = Context::for_function(func.clone());
 			ctx.func = func.clone();
 			module.define_function(func_id, &mut ctx)
-				.expect(&format!("Failed to define function `{}`", func_name));
+				.expect(&format!("Не вийшло визначити функцію `{}`", func_name));
 		}
 
 		let product = module.finish();
@@ -231,7 +231,7 @@ impl IRGenerator {
 		let link = Command::new("clang")
 			.args(&["output.o", "libyi_std.a", "-o", "output"])
 			.output()
-			.expect("Failed to run linker");
+			.expect("Не вийшло запустити лінкер");
 
 		if !link.status.success() {
 			eeprintln!("Лінкувати не вийшло:");

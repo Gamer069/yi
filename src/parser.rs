@@ -372,7 +372,7 @@ impl Parser {
 					if let Some(tok) = self.cur() && let Tok::Eq = tok.tok {
 						self.eat();
 						let expr = self.parse_expr();
-						self.cur_scope.borrow_mut().set(&id, Symbol::Variable(expr)).expect("Failed to assign to variable");
+						self.cur_scope.borrow_mut().set(&id, Symbol::Variable(expr)).expect("Не вийшло присвоїти значення змінній");
 					}
 				},
 				Tok::Return => {

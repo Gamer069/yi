@@ -16,7 +16,7 @@ pub struct Lexer {
 
 impl Lexer {
 	pub fn new(fname: String) -> Lexer {
-		let codestring = fs::read_to_string(fname).expect("Failed to read file for some reason...");
+		let codestring = fs::read_to_string(fname).expect("Не вийшло прочитати файл!");
 		Self { code: codestring }
 	}
 
@@ -174,7 +174,7 @@ impl Lexer {
 			*col += 1;
 		}
 		if num.is_empty() {
-			println!("Empty...");
+			eeprintln!("Число пусте...");
 			return;
 		}
 
