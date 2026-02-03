@@ -251,8 +251,18 @@ impl Parser {
 	fn parse_let_statement(&mut self) -> Statements {
 		self.eat_tok(Tok::Let);
 		let id = self.parse_id();
+
+		let specified_ty = if self.cur_non_spanned() != Some(Tok::Eq) {
+			self.eat_tok(Tok::Colon);
+			Some(self.eat_tok_var(Tok::Type(TypeKw::I64), |tok| if let Tok::Type(t) = tok { Some(t.clone()) } else { None }))
+		} else {
+			None
+		};
+
 		self.eat_tok(Tok::Eq);
-		let expr = self.parse_expr();
+		let mut expr = self.parse_expr();
+
+		expr = self.coerce_expr_to_type(expr, specified_ty.clone());
 
 		// Check for and consume semicolon if present
 		if let Some(tok) = self.cur() && tok.tok == Tok::Sc {
@@ -265,7 +275,7 @@ impl Parser {
 			self.cur_scope.borrow_mut().put(&id, Symbol::Variable(expr.clone()));
 		}
 
-		Statements::Let(id, Box::from(expr))
+		Statements::Let(id, specified_ty, Box::from(expr))
 	}
 
 	fn parse_func_statement(&mut self) -> Statements {
@@ -273,7 +283,6 @@ impl Parser {
 		let id = self.parse_id();
 		self.eat_tok(Tok::Lp);
 
-		// // TODO: args
 		let mut args = vec![];
 
 		if self.cur_non_spanned() != Some(Tok::Rp) {
@@ -341,7 +350,6 @@ impl Parser {
 					if self.cur_non_spanned() == Some(Tok::Lp) {
 						self.eat();
 
-						// // TODO: args
 						let mut args = vec![];
 
 						if self.cur_non_spanned() != Some(Tok::Rp) {
@@ -411,6 +419,23 @@ impl Parser {
 			tok_err!(Tok::Id(String::new()), cur, self.lines[cur.line - 1]);
 			std::process::exit(-1);
 		}
+	}
+
+	fn coerce_expr_to_type(&self, expr: Expr, target_ty: Option<TypeKw>) -> Expr {
+		if let Some(TypeKw::I64) = target_ty {
+			if let Expr::U64(val) = expr {
+				if val <= i64::MAX as u64 {
+					return Expr::I64(val as i64);
+				}
+			}
+
+			if let Expr::BinOp(left, op, right) = expr {
+				let new_left = Box::new(self.coerce_expr_to_type(*left, target_ty.clone()));
+				let new_right = Box::new(self.coerce_expr_to_type(*right, target_ty.clone()));
+				return Expr::BinOp(new_left, op, new_right);
+			}
+		}
+		expr
 	}
 
 	fn cur(&self) -> Option<SpannedTok> {
@@ -497,7 +522,7 @@ pub enum Expr {
 
 #[derive(Debug, Clone)]
 pub enum Statements {
-	Let(String, Box<Expr>),
+	Let(String, Option<TypeKw>, Box<Expr>),
 	Assign(String, Box<Expr>),
 	Func(String, Vec<(String, keywords::TypeKw)>, keywords::TypeKw, Vec<Statements>),
 	Expr(Box<Expr>),

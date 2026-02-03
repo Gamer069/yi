@@ -187,6 +187,7 @@ impl Lexer {
 				toks.push(Tok::Val(keywords::TypeKwWithVal::U64(num.parse::<u64>().unwrap())).to_spanned(line, *col));
 			}
 		}
+
 	}
 }
 

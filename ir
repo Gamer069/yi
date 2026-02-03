@@ -1,0 +1,74 @@
+function u0:0() fast {
+    sig0 = (i64) -> i32 system_v
+    fn0 = u0:1 sig0
+
+block0:
+    v0 = iconst.i64 5
+    v1 = iconst.i64 3
+    v2 = iconst.i64 2
+    v3 = iconst.i64 8
+    v4 = isub v2, v3  ; v2 = 2, v3 = 8
+    v5 = imul v1, v4  ; v1 = 3
+    v6 = iconst.i64 -4
+    v7 = sdiv v5, v6  ; v6 = -4
+    v8 = iadd v0, v7  ; v0 = 5
+    v9 = iconst.i64 9
+    v10 = imul v8, v9  ; v9 = 9
+    v11 = iconst.i64 1
+    v12 = iadd v10, v11  ; v11 = 1
+    v13 = iconst.i64 2
+    v14 = isub v12, v13  ; v13 = 2
+    v15 = iconst.i64 7
+    v16 = iadd v8, v15  ; v15 = 7
+    v17 = sdiv v14, v16
+    v18 = iadd v12, v8
+    v19 = imul v17, v18
+    v20 = iconst.i64 3
+    v21 = sdiv v19, v20  ; v20 = 3
+    v22 = iadd v21, v17
+    v23 = imul v8, v12
+    v24 = iconst.i64 2
+    v25 = sdiv v23, v24  ; v24 = 2
+    v26 = isub v22, v25
+    v27 = iconst.i64 -1
+    v28 = imul v26, v27  ; v27 = -1
+    v29 = iconst.i64 5
+    v30 = iadd v21, v29  ; v29 = 5
+    v31 = sdiv v28, v30
+    v32 = iadd v31, v8
+    v33 = imul v12, v17
+    v34 = sdiv v33, v21
+    v35 = isub v32, v34
+    v36 = iconst.i64 2
+    v37 = imul v35, v36  ; v36 = 2
+    v38 = iadd v37, v31
+    v39 = sdiv v8, v12
+    v40 = isub v38, v39
+    v41 = iadd v40, v35
+    v42 = imul v26, v21
+    v43 = sdiv v42, v31
+    v44 = isub v41, v43
+    v45 = iconst.i64 1
+    v46 = imul v44, v45  ; v45 = 1
+    v47 = iconst.i64 3
+    v48 = iadd v40, v47  ; v47 = 3
+    v49 = sdiv v46, v48
+    v50 = iadd v49, v44
+    v51 = imul v40, v35
+    v52 = sdiv v51, v31
+    v53 = isub v50, v52
+    v54 = iconst.i64 2
+    v55 = imul v53, v54  ; v54 = 2
+    v56 = iadd v55, v49
+    v57 = sdiv v44, v40
+    v58 = isub v56, v57
+    v59 = iadd v58, v53
+    v60 = isub v49, v44
+    v61 = imul v59, v60
+    v62 = iadd v40, v35
+    v63 = sdiv v61, v62
+    v64 = call fn0(v63)
+    return
+}
+
+

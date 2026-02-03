@@ -29,7 +29,13 @@ struct Cli {
 enum Commands {
 	#[clap(alias = "b")]
 	Build {
-		file: String
+		file: String,
+
+		#[arg(short, long)]
+		ir: bool,
+
+		#[arg(short, long)]
+		verbose: bool,
 	},
 }
 
@@ -37,7 +43,7 @@ fn main() {
 	let cli = Cli::parse();
 
 	match cli.command {
-		Commands::Build { file } => {
+		Commands::Build { file, ir, verbose } => {
 			let path = Path::new(&file);
 			if !path.exists() {
 				eeprintln!("{}: файл не знайдено", file);
@@ -47,12 +53,12 @@ fn main() {
 				eeprintln!("{} директорія", file);
 				std::process::exit(-1);
 			}
-			lex(file);
+			lex(file, ir, verbose);
 		}
 	}
 }
 
-fn lex(file: String) {
+fn lex(file: String, ir: bool, verbose: bool) {
 	let lexer: Lexer = Lexer::new(file);
 	let (toks, lines) = lexer.lex();
 
@@ -60,6 +66,6 @@ fn lex(file: String) {
 
 	let ast = parser.parse().expect("Failed to parse");
 
-	let mut generator: IRGenerator = IRGenerator::new(ast, parser.sym_table.into_inner());
+	let mut generator: IRGenerator = IRGenerator::new(ast, parser.sym_table.into_inner(), ir, verbose);
 	generator.generate();
 }

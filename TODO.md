@@ -6,9 +6,11 @@
 
 - [x] fix identifiers
 
-- [ ] make it just друклн not друклн_і64 (un-uglify)
+- [x] make it so you can specify type for variables
 
-- [ ] make it so you can specify type for variables
+- [x] make it so the examples/ast.yi example properly works - something is wrong with the types
+
+- [ ] make it just друклн not друклн_і64 (un-uglify)
 
 - [ ] bugfixes
 
@@ -16,4 +18,3 @@
 
 - [ ] make it so ALL errors are in ukrainian INCLUDING IR generation
 
-- [ ] make it so the examples/ast.yi example properly works - something is wrong with the types

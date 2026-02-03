@@ -12,7 +12,7 @@ use cranelift::module::{DataDescription, FuncId, Linkage, Module};
 use cranelift::object::{ObjectBuilder, ObjectModule};
 use cranelift::prelude::{AbiParam, EntityRef, Signature};
 
-use crate::keywords;
+use crate::keywords::{self, TypeKw};
 use crate::{parser::{BinOp, Expr, Statements}, sym_table::SymTable};
 
 macro_rules! eeprintln {
@@ -21,7 +21,7 @@ macro_rules! eeprintln {
 	}};
 }
 
-#[derive(Hash, Copy, Clone)]
+#[derive(Hash, Copy, Clone, Debug)]
 pub enum Signedness {
 	Signed,
 	Unsigned,
@@ -58,10 +58,12 @@ pub struct IRGenerator {
 	pub functions_to_id: HashMap<String, FuncId>,
 	// lit -> mem
 	pub string_literals: HashMap<String, usize>,
+	pub ir: bool,
+	pub verbose: bool,
 }
 
 impl IRGenerator {
-	pub fn new(ast: Vec<Statements>, gst: SymTable) -> Self {
+	pub fn new(ast: Vec<Statements>, gst: SymTable, ir: bool, verbose: bool) -> Self {
 		let cranelift_var_map = HashMap::new();
 		let cranelift_signedness_map = HashMap::new();
 
@@ -90,7 +92,7 @@ impl IRGenerator {
 
 		let builder_ctx = FunctionBuilderContext::new();
 
-		Self { ast, gst, cranelift_var_map, cranelift_signedness_map, module: Some(module), builder_ctx, functions: HashMap::new(), functions_to_id: HashMap::new(), string_literals: HashMap::new() }
+		Self { ast, gst, ir, verbose, cranelift_var_map, cranelift_signedness_map, module: Some(module), builder_ctx, functions: HashMap::new(), functions_to_id: HashMap::new(), string_literals: HashMap::new() }
 	}
 
 	pub fn translate_std_func_name<'a>(yi_name: &'a str) -> &'a str {
@@ -151,11 +153,19 @@ impl IRGenerator {
 	}
 
 	pub fn generate(&mut self) {
-		println!("using cranelift version {}", cranelift::frontend::VERSION);
+		eprintln!("Користуємо cranelift версію {}", cranelift::frontend::VERSION);
+
+		if self.verbose {
+			eprintln!("Перевірка наявності функції старт()...");
+		}
 
 		if !self.gst.contains("старт") {
 			eeprintln!("програма має мати функцію старт()");
 			std::process::exit(-1);
+		}
+
+		if self.verbose {
+			eprintln!("Додавання стандартних функцій...");
 		}
 
 		self.add_std_functions();
@@ -163,6 +173,10 @@ impl IRGenerator {
 		// PRINTIN' TIME!
 		for stmt in &self.ast {
 			if let Statements::Func(id, args, ret_ty, _) = stmt {
+				if self.verbose {
+					eprintln!("створення сигнатури для функції {} з аргументами {:#?} та типом повернення {:#?}", id, args, ret_ty);
+				}
+
 				let mut sig = self.module.as_mut().unwrap().make_signature();
 				for (_arg_id, arg_ty) in args {
 					sig.params.push(AbiParam::new(arg_ty.cranelift()));
@@ -183,6 +197,10 @@ impl IRGenerator {
 			}
 		}
 
+		if self.verbose {
+			eprintln!("Генерація IR для {} функцій...", self.ast.len());
+		}
+
 		for stmt in self.ast.clone() {
 			if let Statements::Func(id, args, ret_ty, stmts) = stmt {
 				self.gen_func(id.clone(), args.clone(), ret_ty.clone(), stmts.clone());
@@ -191,6 +209,9 @@ impl IRGenerator {
 
 		let mut module = self.module.take().expect("Module missing");
 
+		if self.verbose {
+			eprintln!("Оголошення {} функцій користувача", self.functions.len());
+		}
 
 		for (func_name, func) in &self.functions {
 			let func_id = *self.functions_to_id.get(func_name).unwrap();
@@ -258,8 +279,8 @@ impl IRGenerator {
 				continue;
 			}
 
-			if let Statements::Let(var_id, expr) = stmt {
-				self.gen_let(var_id, expr, &mut func_builder);
+			if let Statements::Let(var_id, ty, expr) = stmt {
+				self.gen_let(var_id, ty, expr, &mut func_builder);
 			} else if let Statements::Assign(var_id, expr) = stmt {
 				self.gen_assign(var_id, expr, &mut func_builder);
 			} else if let Statements::Expr(expr) = stmt {
@@ -277,6 +298,11 @@ impl IRGenerator {
 
 		func_builder.seal_block(entry_block);
 
+		if self.ir {
+			println!("{}", func_builder.func.display());
+			println!();
+		}
+
 		func_builder.finalize();
 
 		self.functions.insert(id.clone(), func);
@@ -284,16 +310,18 @@ impl IRGenerator {
 		self.builder_ctx = builder_ctx;
 	}
 
-	pub fn gen_let(&mut self, var_id: String, expr: Box<Expr>, mut func_builder: &mut FunctionBuilder<'_>) {
+	pub fn gen_let(&mut self, var_id: String, ty: Option<TypeKw>, expr: Box<Expr>, mut func_builder: &mut FunctionBuilder<'_>) {
 		let expr = *expr;
 		let (val, signedness) = self.gen_expr(expr.clone(), &mut func_builder);
-		let ty = func_builder.func.dfg.value_type(val);
+		let final_signedness = ty.clone().map(|t| t.signedness()).unwrap_or(signedness);
+
+		let ty = ty.map(|ty| ty.cranelift()).unwrap_or(func_builder.func.dfg.value_type(val));
 		let new_var = func_builder.declare_var(ty);
 
 		func_builder.def_var(new_var, val);
 
 		self.cranelift_var_map.insert(var_id.clone(), new_var.as_u32() as usize);
-		self.cranelift_signedness_map.insert(var_id, signedness);
+		self.cranelift_signedness_map.insert(var_id, final_signedness);
 	}
 
 	pub fn gen_assign(&mut self, var_id: String, expr: Box<Expr>, mut func_builder: &mut FunctionBuilder<'_>) {
@@ -319,7 +347,7 @@ impl IRGenerator {
 				(builder.ins().f64const(val), Signedness::Signed)
 			},
 			Expr::I64(val) => {
-				(builder.ins().iconst(types::I64, val as i64), Signedness::Signed)
+				(builder.ins().iconst(types::I64, val), Signedness::Signed)
 			},
 			Expr::Str(val) => {
 				// strings are complicated
@@ -423,8 +451,14 @@ impl IRGenerator {
 
 		let target_ty = self.highest_type(left_ty, right_ty).unwrap();
 
-		let left_cast = self.cast(left, left_ty, left_signedness, target_ty, left_signedness, builder);
-		let right_cast = self.cast(right, right_ty, right_signedness, target_ty, right_signedness, builder);
+		let op_signedness = if left_signedness.is_signed() || right_signedness.is_signed() {
+			Signedness::Signed
+		} else {
+			Signedness::Unsigned
+		};
+
+		let left_cast = self.cast(left, left_ty, left_signedness, target_ty, op_signedness, builder);
+		let right_cast = self.cast(right, right_ty, right_signedness, target_ty, op_signedness, builder);
 
 		let val = match op {
 			BinOp::Add => {
@@ -450,7 +484,7 @@ impl IRGenerator {
 			}
 			BinOp::Div => {
 				if target_ty.is_int() {
-					if left_signedness.is_signed() {
+					if op_signedness.is_signed() {
 						builder.ins().sdiv(left_cast, right_cast)
 					} else {
 						builder.ins().udiv(left_cast, right_cast)
@@ -480,7 +514,7 @@ impl IRGenerator {
 			BinOp::EqEq => Signedness::Unsigned,
 			_ => {
 				if target_ty.is_int() {
-					left_signedness
+					op_signedness
 				} else {
 					Signedness::Unsigned
 				}
