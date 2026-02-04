@@ -100,10 +100,12 @@ impl IRGenerator {
 			"друклн" => "drukln",
 			"друклн_і64" => "drukln_i64",
 			"друклн_стр" => "drukln_str",
+			"друклн_бул" => "drukln_bool",
 
 			"друк" => "druk",
 			"друк_і64" => "druk_i64",
 			"друк_стр" => "druk_str",
+			"друк_бул" => "druk_bool",
 
 			"скинути_вивід" => "skynuty_stdout",
 
@@ -117,9 +119,11 @@ impl IRGenerator {
 		self.add_std_function("друклн", &mut |sig: &mut Signature| Self::void(sig));
 		self.add_std_function("друклн_і64", &mut |sig: &mut Signature| Self::arg_and(sig, types::I64, &mut Self::void));
 		self.add_std_function("друклн_стр", &mut |sig: &mut Signature| Self::arg_and(sig, types::I64, &mut Self::void));
+		self.add_std_function("друклн_бул", &mut |sig: &mut Signature| Self::arg_and(sig, types::I8, &mut Self::void));
 		self.add_std_function("друк", &mut |sig: &mut Signature| Self::void(sig));
 		self.add_std_function("друк_і64", &mut |sig: &mut Signature| Self::arg_and(sig, types::I64, &mut Self::void));
 		self.add_std_function("друк_стр", &mut |sig: &mut Signature| Self::arg_and(sig, types::I64, &mut Self::void));
+		self.add_std_function("друк_бул", &mut |sig: &mut Signature| Self::arg_and(sig, types::I8, &mut Self::void));
 		self.add_std_function("скинути_вивід", &mut |sig: &mut Signature| Self::void(sig));
 	}
 

@@ -13,6 +13,13 @@ pub extern "C" fn drukln_i64(val: i64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn drukln_bool(val: i8) -> i32 {
+	if val == 1 { println!("так") } else { println!("ні") };
+
+    0
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn drukln_str(str: *const i8) {
 	unsafe {
 		let c_str = CStr::from_ptr(str);
@@ -29,6 +36,13 @@ pub extern "C" fn druk() -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn druk_i64(val: i64) -> i32 {
     print!("{}", val);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn druk_bool(val: i8) -> i32 {
+	if val == 1 { print!("так") } else { print!("ні") };
+
     0
 }
 
