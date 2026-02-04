@@ -61,6 +61,8 @@ pub fn keywords(toks: &mut Vec<SpannedTok>, id: String, line: usize, col: usize)
 
 		"змінна" => toks.push(Tok::Let.to_spanned(line, col)),
 		"функ" => toks.push(Tok::Func.to_spanned(line, col)),
+		"якщо" => toks.push(Tok::If.to_spanned(line, col)),
+		"інакше" => toks.push(Tok::Else.to_spanned(line, col)),
 
 		"верни" => toks.push(Tok::Return.to_spanned(line, col)),
 

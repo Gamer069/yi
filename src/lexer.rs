@@ -111,6 +111,15 @@ impl Lexer {
 						}
 						toks.push(Tok::Div.to_spanned(line, col));
 					},
+					'!' => {
+						let peeked = chars.peek();
+						if peeked == Some(&'=') {
+							toks.push(Tok::NotEq.to_spanned(line, col));
+							chars.next();
+						} else {
+							toks.push(Tok::Not.to_spanned(line, col));
+						}
+					},
 					'(' => {
 						toks.push(Tok::Lp.to_spanned(line, col));
 					},

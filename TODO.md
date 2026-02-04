@@ -14,6 +14,8 @@
 
 - [x] current examples work
 
+- [x] add an if statement 
+
 - [ ] MORE EXAMPLES
 
 - [ ] put stuff in different files so its not that messy
@@ -33,8 +35,6 @@
 - [ ] make an `англ {}` block
 
 - [ ] add NotEq to BinOp
-
-- [ ] add an if statement (WIP!)
 
 - [ ] add switch statement (`побачим x { якщо 1: верни ні; якщо 2: верни так; взагалі: верни хтозна; }`)
 

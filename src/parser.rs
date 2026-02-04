@@ -52,14 +52,19 @@ pub struct Parser {
 	pub i: usize,
 	pub sym_table: RefCell<SymTable>, // global
 	pub cur_scope: Rc<RefCell<SymTable>>, // current local
-	pub cur_scope_is_global: bool,
+	pub scope_depth: usize,
 }
 
 impl Parser {
 	pub fn new(toks: Vec<SpannedTok>, lines: Vec<String>) -> Self {
 		let gst = RefCell::new(SymTable::new());
-		Self { tokens: toks, i: 0, lines, sym_table: gst.clone(), cur_scope: Rc::new(gst), cur_scope_is_global: true }
+		Self { tokens: toks, i: 0, lines, sym_table: gst.clone(), cur_scope: Rc::new(gst), scope_depth: 0 }
 	}
+
+	fn scope_global(&self) -> bool {
+		self.scope_depth == 0
+	}
+
 	pub fn parse(&mut self) -> Result<AST, String> {
 		let mut statements: AST = Vec::new();
 
@@ -134,6 +139,10 @@ impl Parser {
 				self.eat(); // consume EqEq
 				let right = self.parse_add_sub();
 				left = Expr::BinOp(Box::new(left), BinOp::EqEq, Box::new(right));
+			} else if tok.tok == Tok::NotEq {
+				self.eat(); // consume NotEq
+				let right = self.parse_add_sub();
+				left = Expr::BinOp(Box::new(left), BinOp::NotEq, Box::new(right));
 			} else {
 				break;
 			}
@@ -231,6 +240,20 @@ impl Parser {
 					Expr::Id(id_clone)
 				}
 			},
+			Some(Tok::If) => {
+				self.eat();
+
+				let cond = self.parse_equality();
+
+				let then_block = self.parse_block();
+				let mut else_block = vec![];
+
+				if self.opt_tok(Tok::Else).is_some() {
+					else_block = self.parse_block();
+				}
+
+				Expr::If(Box::new(cond), then_block, else_block)
+			},
 			Some(Tok::Val(keywords::TypeKwWithVal::Str(s))) => {
 				let s_clone = s.clone();
 				self.eat();
@@ -248,6 +271,128 @@ impl Parser {
 		}
 	}
 
+	fn parse_statement(&mut self) -> Statements {
+		let cur = self.cur().unwrap();
+
+		match cur.tok {
+			Tok::Rc => {
+				// should never be parsed as a statement
+				unreachable!("parse_statement called on '}}'");
+			}
+
+			Tok::Func => {
+				self.parse_func_statement()
+			}
+
+			Tok::Let => {
+				self.parse_let_statement()
+			}
+
+			Tok::Sc => {
+				self.eat();
+				// skip empty statement → parse next real one
+				self.parse_statement()
+			}
+
+			Tok::Return => {
+				self.eat();
+				let expr = self.parse_expr();
+
+				if let Some(tok) = self.cur() && tok.tok == Tok::Sc {
+					self.eat();
+				}
+
+				Statements::Return(Box::new(expr))
+			}
+
+			Tok::Id(id) => {
+				let id = id.clone();
+				self.eat();
+
+				// function call
+				if self.cur_non_spanned() == Some(Tok::Lp) {
+					self.eat();
+
+					let mut args = vec![];
+					if self.cur_non_spanned() != Some(Tok::Rp) {
+						loop {
+							args.push(self.parse_expr());
+							if self.cur_non_spanned() == Some(Tok::Comma) {
+								self.eat();
+							} else {
+								break;
+							}
+						}
+					}
+
+					self.eat_tok(Tok::Rp);
+
+					if self.cur_non_spanned() == Some(Tok::Sc) {
+						self.eat();
+					}
+
+					Statements::Expr(Box::new(Expr::Call(id, args)))
+				}
+				// assignment
+				else if self.cur_non_spanned() == Some(Tok::Eq) {
+					self.eat();
+					let expr = self.parse_expr();
+
+					if self.cur_non_spanned() == Some(Tok::Sc) {
+						self.eat();
+					}
+
+					self.cur_scope
+						.borrow_mut()
+						.set(&id, Symbol::Variable(expr.clone()))
+						.expect("Не вийшло присвоїти значення змінній");
+
+					Statements::Assign(id, Box::new(expr))
+				}
+				// plain identifier expression
+				else {
+					if self.cur_non_spanned() == Some(Tok::Sc) {
+						self.eat();
+					}
+
+					Statements::Expr(Box::new(Expr::Id(id)))
+				}
+			}
+
+			_ => {
+				let expr = self.parse_expr();
+
+				if let Some(tok) = self.cur() && tok.tok == Tok::Sc {
+					self.eat();
+				}
+
+				Statements::Expr(Box::new(expr))
+			}
+		}
+	}
+
+	/// Parses a `{ ... }` block and returns the statements inside.
+	fn parse_block(&mut self) -> Vec<Statements> {
+        self.eat_tok(Tok::Lc); // consume '{'
+        let mut statements = Vec::new();
+
+        while let Some(cur) = self.cur() {
+            match cur.tok {
+                Tok::Rc => break, // end of block
+                Tok::Sc => { // skip standalone semicolons
+                    self.eat();
+                    continue;
+                },
+                _ => {
+                    statements.push(self.parse_statement());
+                }
+            }
+        }
+
+        self.eat_tok(Tok::Rc); // consume '}'
+        statements
+    }
+
 	fn parse_let_statement(&mut self) -> Statements {
 		self.eat_tok(Tok::Let);
 		let id = self.parse_id();
@@ -259,23 +404,30 @@ impl Parser {
 			None
 		};
 
-		self.eat_tok(Tok::Eq);
-		let mut expr = self.parse_expr();
+		let expr = if self.cur_non_spanned() == Some(Tok::Eq) {
+			self.eat_tok(Tok::Eq);
 
-		expr = self.coerce_expr_to_type(expr, specified_ty.clone());
+			let mut expr = self.parse_expr();
 
-		// Check for and consume semicolon if present
-		if let Some(tok) = self.cur() && tok.tok == Tok::Sc {
-			self.eat();
-		}
+			expr = self.coerce_expr_to_type(expr, specified_ty.clone());
 
-		if self.cur_scope_is_global {
-			self.sym_table.borrow_mut().put(&id, Symbol::Variable(expr.clone()));
+			// Check for and consume semicolon if present
+			if let Some(tok) = self.cur() && tok.tok == Tok::Sc {
+				self.eat();
+			}
+
+			if self.scope_global() {
+				self.sym_table.borrow_mut().put(&id, Symbol::Variable(expr.clone()));
+			} else {
+				self.cur_scope.borrow_mut().put(&id, Symbol::Variable(expr.clone()));
+			}
+
+			Some(Box::new(expr))
 		} else {
-			self.cur_scope.borrow_mut().put(&id, Symbol::Variable(expr.clone()));
-		}
+			None
+		};
 
-		Statements::Let(id, specified_ty, Box::from(expr))
+		Statements::Let(id, specified_ty, expr)
 	}
 
 	fn parse_func_statement(&mut self) -> Statements {
@@ -312,14 +464,12 @@ impl Parser {
 			TypeKw::Void
 		};
 
-		self.eat_tok(Tok::Lc);
-
-		let mut statements: AST = Vec::new();
+		let mut statements: AST = vec![];
 
 		let prev_scope = self.cur_scope.clone();
 		let func_scope = Rc::new(RefCell::new(SymTable::new()));
 		self.cur_scope = func_scope.clone();
-		self.cur_scope_is_global = false;
+		self.scope_depth += 1;
 
 		for (name, _ty) in args.clone() {
 			let val = Symbol::Variable(Expr::Arg(name.clone()));
@@ -327,84 +477,13 @@ impl Parser {
 			self.cur_scope.borrow_mut().put(&name, val);
 		}
 
-		while let Some(cur) = self.cur() {
-			match cur.tok {
-				Tok::Rc => {
-					break;
-				},
-				Tok::Func => {
-					self.parse_func_statement();
-				},
-				Tok::Let => {
-					let statement = self.parse_let_statement();
-					statements.push(statement);
-				},
-				Tok::Sc => {
-					self.eat();
-
-					continue;
-				},
-				Tok::Id(id) => {
-					self.eat();
-
-					if self.cur_non_spanned() == Some(Tok::Lp) {
-						self.eat();
-
-						let mut args = vec![];
-
-						if self.cur_non_spanned() != Some(Tok::Rp) {
-							loop {
-								let expr = self.parse_expr();
-								args.push(expr);
-
-								if self.cur_non_spanned() == Some(Tok::Comma) {
-									self.eat();
-								} else {
-									break;
-								}
-							}
-						}
-
-						self.eat_tok(Tok::Rp);
-						statements.push(Statements::Expr(Box::new(Expr::Call(id.clone(), args))));
-					}
-
-					if let Some(tok) = self.cur() && let Tok::Eq = tok.tok {
-						self.eat();
-						let expr = self.parse_expr();
-						self.cur_scope.borrow_mut().set(&id, Symbol::Variable(expr)).expect("Не вийшло присвоїти значення змінній");
-					}
-				},
-				Tok::Return => {
-					self.eat();
-
-					let expr = self.parse_expr();
-					statements.push(Statements::Return(Box::new(expr)));
-
-					if let Some(tok) = self.cur() && let Tok::Sc = tok.tok {
-						self.eat();
-					}
-				},
-				_ => {
-					let expr = self.parse_expr();
-					statements.push(Statements::Expr(Box::new(expr)));
-
-					if let Some(tok) = self.cur() && let Tok::Sc = tok.tok {
-						self.eat();
-					}
-				},
-			}
-		};
+		statements = self.parse_block();
 
 		self.sym_table.borrow_mut().put(&id, Symbol::Function(statements.clone(), self.cur_scope.clone()));
 
 		self.cur_scope = prev_scope;
 
-		// TODO: use a smarter way to determine current scope globalness - nested functions will
-		// in-fact exist
-		self.cur_scope_is_global = true;
-
-		self.eat_tok(Tok::Rc);
+		self.scope_depth -= 1;
 
 		Statements::Func(id, args, ret_ty, statements)
 	}
@@ -499,6 +578,7 @@ pub enum BinOp {
 	Mul,
 	Div,
 	EqEq,
+	NotEq,
 }
 
 #[derive(Debug, Clone)]
@@ -515,14 +595,23 @@ pub enum Expr {
 	Str(String),
 	Bool(bool),
 	Id(String),
+
+	// function name, arguments
 	Call(String, Vec<Expr>),
+
 	Arg(String),
+
+	// lhs, op, rhs
 	BinOp(Box<Expr>, BinOp, Box<Expr>),
+
+	// condition,   then block   ,   else block
+	If(Box<Expr>, Vec<Statements>, Vec<Statements>),
+	Void
 }
 
 #[derive(Debug, Clone)]
 pub enum Statements {
-	Let(String, Option<TypeKw>, Box<Expr>),
+	Let(String, Option<TypeKw>, Option<Box<Expr>>),
 	Assign(String, Box<Expr>),
 	Func(String, Vec<(String, keywords::TypeKw)>, keywords::TypeKw, Vec<Statements>),
 	Expr(Box<Expr>),

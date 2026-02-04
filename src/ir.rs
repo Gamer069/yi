@@ -4,7 +4,7 @@ use std::process::Command;
 use std::{collections::HashMap};
 
 use cranelift::codegen::Context;
-use cranelift::codegen::ir::Function;
+use cranelift::codegen::ir::{BlockArg, Function};
 use cranelift::codegen::settings::Configurable;
 use cranelift::codegen::{ir::{types, InstBuilder, Type, Value}, settings};
 use cranelift::frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
@@ -286,12 +286,18 @@ impl IRGenerator {
 			if let Statements::Let(var_id, ty, expr) = stmt {
 				self.gen_let(var_id, ty, expr, &mut func_builder);
 			} else if let Statements::Assign(var_id, expr) = stmt {
-				self.gen_assign(var_id, expr, &mut func_builder);
+				self.gen_assign(var_id, *expr, &mut func_builder);
 			} else if let Statements::Expr(expr) = stmt {
-				self.gen_expr(*expr, &mut func_builder);
+				self.gen_expr(Some(*expr), &mut func_builder);
 			} else if let Statements::Return(expr) = stmt {
-				let (val, _signedness) = self.gen_expr(*expr, &mut func_builder);
-				func_builder.ins().return_(&[val]);
+				match self.gen_expr(Some(*expr), &mut func_builder) {
+					Some((val, _signedness)) => {
+						func_builder.ins().return_(&[val]);
+					},
+					None => {
+						func_builder.ins().return_(&[]);
+					}
+				}
 				terminated = true;
 			}
 		}
@@ -314,24 +320,29 @@ impl IRGenerator {
 		self.builder_ctx = builder_ctx;
 	}
 
-	pub fn gen_let(&mut self, var_id: String, ty: Option<TypeKw>, expr: Box<Expr>, mut func_builder: &mut FunctionBuilder<'_>) {
-		let expr = *expr;
-		let (val, signedness) = self.gen_expr(expr.clone(), &mut func_builder);
-		let final_signedness = ty.clone().map(|t| t.signedness()).unwrap_or(signedness);
+	pub fn gen_let(&mut self, var_id: String, ty: Option<TypeKw>, expr: Option<Box<Expr>>, mut func_builder: &mut FunctionBuilder<'_>) {
+		let expr = expr.map(|expr| *expr);
+		let expr = self.gen_expr(expr.clone(), &mut func_builder);
 
-		let ty = ty.map(|ty| ty.cranelift()).unwrap_or(func_builder.func.dfg.value_type(val));
-		let new_var = func_builder.declare_var(ty);
+		if let Some((val, signedness)) = expr {
+			let cr_ty = ty.clone().map(|ty| ty.cranelift()).unwrap_or(func_builder.func.dfg.value_type(val));
 
-		func_builder.def_var(new_var, val);
+			let new_var = func_builder.declare_var(cr_ty);
 
-		self.cranelift_var_map.insert(var_id.clone(), new_var.as_u32() as usize);
-		self.cranelift_signedness_map.insert(var_id, final_signedness);
+			func_builder.def_var(new_var, val);
+
+			self.cranelift_var_map.insert(var_id.clone(), new_var.as_u32() as usize);
+
+			let final_signedness = ty.map(|t| t.signedness()).unwrap_or(signedness);
+
+			self.cranelift_signedness_map.insert(var_id, final_signedness);
+		}
 	}
 
-	pub fn gen_assign(&mut self, var_id: String, expr: Box<Expr>, mut func_builder: &mut FunctionBuilder<'_>) {
+	pub fn gen_assign(&mut self, var_id: String, expr: Expr, mut func_builder: &mut FunctionBuilder<'_>) {
 		let var = self.cranelift_var_map.get(&var_id).copied();
 
-		let (val, _signedness) = self.gen_expr(*expr.clone(), &mut func_builder);
+		let (val, _signedness) = self.gen_expr(Some(expr.clone()), &mut func_builder).expect("Немає значення для призначення змінної");
 
 		if let Some(var) = var {
 			let variable = Variable::new(var);
@@ -342,18 +353,19 @@ impl IRGenerator {
 		}
 	}
 
-	pub fn gen_expr(&mut self, expr: Expr, mut builder: &mut FunctionBuilder) -> (Value, Signedness) {
+
+	pub fn gen_expr(&mut self, expr: Option<Expr>, mut builder: &mut FunctionBuilder) -> Option<(Value, Signedness)> {
 		match expr {
-			Expr::U64(val) => {
-				(builder.ins().iconst(types::I64, val as i64), Signedness::Unsigned)
+			Some(Expr::U64(val)) => {
+				Some((builder.ins().iconst(types::I64, val as i64), Signedness::Unsigned))
 			},
-			Expr::F64(val) => {
-				(builder.ins().f64const(val), Signedness::Signed)
+			Some(Expr::F64(val)) => {
+				Some((builder.ins().f64const(val), Signedness::Signed))
 			},
-			Expr::I64(val) => {
-				(builder.ins().iconst(types::I64, val), Signedness::Signed)
+			Some(Expr::I64(val)) => {
+				Some((builder.ins().iconst(types::I64, val), Signedness::Signed))
 			},
-			Expr::Str(val) => {
+			Some(Expr::Str(val)) => {
 				// strings are complicated
 				let module = self.module.as_mut().unwrap();
 
@@ -376,69 +388,218 @@ impl IRGenerator {
 				let data_ref = module.declare_data_in_func(data_id, &mut builder.func);
 				let ptr_val = builder.ins().symbol_value(types::I64, data_ref);
 
-				(ptr_val, Signedness::Signed)
+				Some((ptr_val, Signedness::Signed))
 			},
-			Expr::Bool(val) => {
+			Some(Expr::Bool(val)) => {
 				if val {
-					(builder.ins().iconst(types::I8, 1), Signedness::Signed)
+					Some((builder.ins().iconst(types::I8, 1), Signedness::Signed))
 				} else {
-					(builder.ins().iconst(types::I8, 0), Signedness::Signed)
+					Some((builder.ins().iconst(types::I8, 0), Signedness::Signed))
 				}
 			},
-			Expr::Id(id) => {
+			Some(Expr::Id(id)) => {
 				let index = self.cranelift_var_map.get(&id);
 				if let Some(index) = index {
-					(builder.use_var(Variable::new(*index)), self.cranelift_signedness_map.get(&id).unwrap().clone())
+					Some((builder.use_var(Variable::new(*index)), self.cranelift_signedness_map.get(&id).unwrap().clone()))
 				} else {
 					eeprintln!("{} не визначено", id);
 					std::process::exit(-1);
 				}
 			},
-			Expr::Call(id, args) => {
+			Some(Expr::Call(id, args)) => {
 				let actual_name = Self::translate_std_func_name(&id);
 				let module = self.module.as_mut();
 
 				let func_id = self.functions_to_id.get(actual_name);
 
+				let mut i = 0;
+
 				if let Some(func_id) = func_id {
 					let func_ref = module.unwrap().declare_func_in_func(func_id.clone(), &mut builder.func);
 
-					let val_args = args.iter().map(|arg| self.gen_expr(arg.clone(), &mut builder));
+					let val_args = args.iter().map(|arg| {
+						i += 1;
+
+						self.gen_expr(Some(arg.clone()), &mut builder)
+							.expect(&format!("Аргумент {} до функції '{}' є порожнім (мовинен бути значенням)", i+1, id))
+					});
 					let val_args_pure: Vec<_> = val_args.map(|arg| arg.0).collect();
 
 					let call_inst = builder.ins().call(func_ref, &val_args_pure);
 					let res = builder.inst_results(call_inst);
 
 					if res.len() > 0 {
-						return (res[0], Signedness::Signed)
+						return Some((res[0], Signedness::Signed))
 					} else {
-						// Void function - return dummy value
-						return (builder.ins().iconst(types::I32, 0), Signedness::Signed)
+						return None
 					}
 				}
 
 				eeprintln!("Функція `{}` не-задеклерована", actual_name);
 				std::process::exit(-1);
 			}
-			Expr::BinOp(left, op, right) => {
-				let (left_val, left_signedness) = self.gen_expr(*left, builder);
-				let (right_val, right_signedness) = self.gen_expr(*right, builder);
+			Some(Expr::BinOp(left, op, right)) => {
+				let (left_val, left_signedness) = self.gen_expr(Some(*left), builder).expect(&format!("Операція {:#?} не може бути виконана з порожнім лівим операндом.", op));
+				let (right_val, right_signedness) = self.gen_expr(Some(*right), builder).expect(&format!("Операція {:#?} не може бути виконана з порожнім правим операндом.", op));
 
 				let left_ty = builder.func.dfg.value_type(left_val);
 				let right_ty = builder.func.dfg.value_type(right_val);
 
 				if self.type_rank(left_ty).is_some() && self.type_rank(right_ty).is_some() {
-					self.op(left_val, left_signedness, op, right_val, right_signedness, builder)
+					Some(self.op(left_val, left_signedness, op, right_val, right_signedness, builder))
 				} else {
 					eeprintln!("Не вийшло порівняти, лівий операнд не такого самого типу як правий операнд");
 					std::process::exit(-1);
 				}
 			},
-			Expr::Arg(..) => {
+
+			Some(Expr::If(cond, then_block, else_block)) => {
+				let (cond_val, _cond_signedness) = self.gen_expr(Some(*cond), builder)
+					.expect("Якщо не може бути ніщо");
+
+				let then_block_cr = builder.create_block();
+				let else_block_cr = builder.create_block();
+				let merge_block_cr = builder.create_block();
+
+				// Branch on condition from current block
+				builder.ins().brif(cond_val, then_block_cr, &[], else_block_cr, &[]);
+
+				// === Generate THEN block ===
+				builder.switch_to_block(then_block_cr);
+				let (then_val, then_terminated) = self.gen_statements_block(then_block, builder)
+					.expect("Не вийшло скомпілювати блок інструкцій в `якщо`");
+
+				// Add jump to merge if not terminated
+				if !then_terminated {
+					if let Some((val, _)) = then_val {
+						let ty = builder.func.dfg.value_type(val);
+						builder.append_block_param(merge_block_cr, ty);
+						builder.ins().jump(merge_block_cr, &[BlockArg::Value(val)]);
+					} else {
+						builder.ins().jump(merge_block_cr, &[]);
+					}
+				}
+				// Now we can seal then block since we're done with it
+				builder.seal_block(then_block_cr);
+
+				// === Generate ELSE block ===
+				builder.switch_to_block(else_block_cr);
+				let (else_val, else_terminated) = self.gen_statements_block(else_block, builder)
+					.expect("Не вийшло скомпілювати блок інструкцій в `інакше`");
+
+				// Add jump to merge if not terminated
+				if !else_terminated {
+					match (then_val, else_val) {
+						(Some((_then_v, _)), Some((else_v, sign))) => {
+							// Both produce values - merge already has param from then block
+							builder.ins().jump(merge_block_cr, &[BlockArg::Value(else_v)]);
+
+							// Seal blocks and switch to merge
+							builder.seal_block(else_block_cr);
+							builder.switch_to_block(merge_block_cr);
+							builder.seal_block(merge_block_cr);
+
+							return Some((builder.block_params(merge_block_cr)[0], sign));
+						},
+						(None, None) => {
+							// Neither produces values
+							builder.ins().jump(merge_block_cr, &[]);
+
+							builder.seal_block(else_block_cr);
+							builder.switch_to_block(merge_block_cr);
+							builder.seal_block(merge_block_cr);
+
+							return None;
+						},
+						(Some((then_v, sign)), None) if then_terminated => {
+							// Only else is active, then terminated
+							builder.ins().jump(merge_block_cr, &[]);
+
+							builder.seal_block(else_block_cr);
+							builder.switch_to_block(merge_block_cr);
+							builder.seal_block(merge_block_cr);
+
+							return None;
+						},
+						(None, Some((else_v, sign))) if !then_terminated => {
+							// Type mismatch
+							eeprintln!("Гілки умови `якщо` повинні повертати однакові типи");
+							std::process::exit(-1);
+						},
+						_ => {
+							eeprintln!("Гілки умови `якщо` повинні повертати однакові типи");
+							std::process::exit(-1);
+						}
+					}
+				} else if then_terminated {
+					// Both terminated - no merge needed
+					builder.seal_block(else_block_cr);
+					builder.seal_block(merge_block_cr);
+					return None;
+				} else {
+					// else terminated, then didn't - merge already has jump from then
+					builder.seal_block(else_block_cr);
+					builder.switch_to_block(merge_block_cr);
+					builder.seal_block(merge_block_cr);
+
+					if let Some((_, sign)) = then_val {
+						return Some((builder.block_params(merge_block_cr)[0], sign));
+					} else {
+						return None;
+					}
+				}
+			},
+
+			// support both
+			Some(Expr::Void) => None,
+			None => None,
+
+			Some(Expr::Arg(..)) => {
 				eeprintln!("Щось сталось не так - АСД має інвалідний для нього вираз");
 				std::process::exit(-1);
 			}
 		}
+	}
+
+	pub fn gen_statements_block(
+		&mut self,
+		stmts: Vec<Statements>,
+		builder: &mut FunctionBuilder
+	) -> Result<(Option<(Value, Signedness)>, bool), String> {
+		let mut last_value = None;
+		let mut terminated = false;
+
+		for stmt in stmts {
+			match stmt {
+				Statements::Let(var_id, ty, expr) => {
+					self.gen_let(var_id, ty, expr, builder);
+				},
+				Statements::Assign(var_id, expr) => {
+					self.gen_assign(var_id, *expr, builder);
+				},
+				Statements::Expr(expr) => {
+					last_value = self.gen_expr(Some(*expr), builder);
+				},
+				Statements::Return(expr) => {
+					match self.gen_expr(Some(*expr), builder) {
+						Some((val, _)) => {
+							builder.ins().return_(&[val]);
+						},
+						None => {
+							builder.ins().return_(&[]);
+						}
+					}
+					terminated = true;
+					break; // Stop processing statements
+				},
+				Statements::Func(_, _, _, _) => {
+					eeprintln!("Вкладені функції ще не підтримуються");
+					std::process::exit(-1);
+				},
+			}
+		}
+
+		Ok((last_value, terminated))
 	}
 
 	pub fn op(
@@ -507,6 +668,21 @@ impl IRGenerator {
 				} else {
 					builder.ins().fcmp(
 						cranelift::codegen::ir::condcodes::FloatCC::Equal,
+						left_cast,
+						right_cast,
+					)
+				}
+			}
+			BinOp::NotEq => {
+				if target_ty.is_int() {
+					builder.ins().icmp(
+						cranelift::codegen::ir::condcodes::IntCC::NotEqual,
+						left_cast,
+						right_cast,
+					)
+				} else {
+					builder.ins().fcmp(
+						cranelift::codegen::ir::condcodes::FloatCC::NotEqual,
 						left_cast,
 						right_cast,
 					)
