@@ -614,4 +614,9 @@ dependencies = [
  "clap",
  "cranelift",
  "unicode-ident",
+ "yi_std",
 ]
+
+[[package]]
+name = "yi_std"
+version = "0.1.0"

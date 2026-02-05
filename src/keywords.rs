@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use crate::{ir::Signedness, keywords, tok::{SpannedTok, Tok}};
+use yi_std::Type as YiType;
 
 macro_rules! enum_str {
     // with optional `pub`
@@ -91,9 +92,44 @@ impl TypeKw {
 			TypeKw::I64 => cranelift::prelude::types::I64,
 			TypeKw::U64 => cranelift::prelude::types::I64,
 			TypeKw::F64 => cranelift::prelude::types::F64,
-			TypeKw::Str => unimplemented!(),
+			TypeKw::Str => cranelift::prelude::types::I64,
 			TypeKw::Bool => cranelift::prelude::types::I8,
 			TypeKw::Void => cranelift::prelude::types::I32,
+		}
+	}
+
+	pub fn from_cranelift(cr: cranelift::prelude::Type, signedness: Signedness) -> Self {
+		match (cr, signedness) {
+			(cranelift::prelude::types::I64, Signedness::Signed) => TypeKw::I64,
+			(cranelift::prelude::types::I64, Signedness::Unsigned) => TypeKw::U64,
+			(cranelift::prelude::types::F64, _) => TypeKw::F64,
+			(cranelift::prelude::types::I8, _) => TypeKw::Bool,
+			(cranelift::prelude::types::I32, Signedness::Signed) => TypeKw::Void,
+			(cranelift::prelude::types::I32, Signedness::Unsigned) => TypeKw::Void,
+			_ => { TypeKw::Void }
+		}
+	}
+
+	pub fn std(&self) -> YiType {
+		match self {
+			TypeKw::I64 => YiType::I64,
+			TypeKw::U64 => YiType::U64,
+			TypeKw::F64 => YiType::F64,
+			TypeKw::Str => YiType::Str,
+			TypeKw::Bool => YiType::Bool,
+			TypeKw::Void => YiType::Void,
+		}
+	}
+
+	pub fn from_yi_std(ty: YiType) -> Self {
+		match ty {
+			YiType::I64 => TypeKw::I64,
+			YiType::U64 => TypeKw::U64,
+			YiType::I8 => TypeKw::Bool,
+			YiType::F64 => TypeKw::F64,
+			YiType::Str => TypeKw::Str,
+			YiType::Bool => TypeKw::Bool,
+			YiType::Void => TypeKw::Void,
 		}
 	}
 

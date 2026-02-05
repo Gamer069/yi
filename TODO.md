@@ -16,6 +16,12 @@
 
 - [x] add an if statement 
 
+- [x] add NotEq to BinOp
+
+- [x] deal with scopes properly rather than blindly assuming the scope is global as soon as a function ends (nested functions break)
+
+- [x] make it just друклн not друклн_і64 (un-uglify)
+
 - [ ] MORE EXAMPLES
 
 - [ ] put stuff in different files so its not that messy
@@ -34,15 +40,13 @@
 
 - [ ] make an `англ {}` block
 
-- [ ] add NotEq to BinOp
-
 - [ ] add switch statement (`побачим x { якщо 1: верни ні; якщо 2: верни так; взагалі: верни хтозна; }`)
-
-- [ ] add a while statement (`поки x { друклн_стр("щось") }`)
 
 - [ ] add ranges
 
 - [ ] add for loops (`для x в 0..=10 { }`)
+
+- [ ] add while loops (`поки x { друклн_стр("щось") }`)
 
 - [ ] add break/continue for loops
 
@@ -55,8 +59,6 @@
 - [ ] better error system - report more clearly what the user did wrong, use less expect()s
 
 - [ ] optimize the final executable
-
-- [ ] deal with scopes properly rather than blindly assuming the scope is global as soon as a function ends (nested functions break)
 
 - [ ] make an LSP for yi called yilsp
 
@@ -74,8 +76,6 @@
 
 - [ ] finish this TODO list
 
-- [ ] make it just друклн not друклн_і64 (un-uglify)
-
 - [ ] inline assembly..? idk tho
 
 - [ ] bugfixes
@@ -87,19 +87,19 @@
 
 ## yi_std
 
+- [x] make an alias for StdString which is a *const i8, so you can pass strings from yi to std without having to have messy arguments
+
+- [x] make macros to make the dev process easier (like std_function! {)
+
+- [x] manual mangling
+
+- [x] a good  mapping
+
 - [ ] file management
-
-- [ ] manual mangling
-
-- [ ] a good  mapping
 
 - [ ] math functions (sqrt, pow, etc.)
 
 - [ ] string manipulation functions (or an actual string wrapper that you/the compiler can instantiate to call .split() on it)
-
-- [ ] make macros to maek the dev process easier (like std_function! {)
-
-- [ ] make an alias for StdString which is a *const i8, so you can pass strings from yi to std without having to have messy arguments
 
 - [ ] add collections to std, etc.
 
