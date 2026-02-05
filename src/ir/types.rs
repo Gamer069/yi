@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs::File, io::Write, process::Command};
+use std::{collections::HashMap, fs::File, io::Write, path::PathBuf, process::Command};
 
 use cranelift::{codegen::{Context, ir::Function}, module::{FuncId, Linkage, Module as _}, object::{ObjectBuilder, ObjectModule}, prelude::{types, AbiParam, Configurable, FunctionBuilderContext, settings}};
 use yi_std::Type as YiType;
@@ -22,10 +22,11 @@ pub struct IRGenerator {
 	pub string_literal_count: usize,
 	pub ir: bool,
 	pub verbose: bool,
+	pub output: PathBuf,
 }
 
 impl IRGenerator {
-	pub fn new(ast: Vec<Statements>, gst: SymTable, ir: bool, verbose: bool) -> Self {
+	pub fn new(ast: Vec<Statements>, gst: SymTable, ir: bool, verbose: bool, output: String) -> Self {
 		let cranelift_var_map = HashMap::new();
 		let cranelift_signedness_map = HashMap::new();
 
@@ -54,7 +55,7 @@ impl IRGenerator {
 
 		let builder_ctx = FunctionBuilderContext::new();
 
-		Self { ast, gst, ir, verbose, cranelift_var_map, cranelift_signedness_map, module: Some(module), builder_ctx, functions: HashMap::new(), functions_to_id: HashMap::new(), string_literals: HashMap::new(), yi_type_map: HashMap::new(), functions_to_ret_type: HashMap::new(), string_literal_count: 0 }
+		Self { ast, gst, ir, verbose, cranelift_var_map, cranelift_signedness_map, module: Some(module), builder_ctx, functions: HashMap::new(), functions_to_id: HashMap::new(), string_literals: HashMap::new(), yi_type_map: HashMap::new(), functions_to_ret_type: HashMap::new(), string_literal_count: 0, output: output.into() }
 	}
 
 	pub fn generate(&mut self) {
@@ -140,12 +141,15 @@ impl IRGenerator {
 		let product = module.finish();
 		let product_bytes = product.emit().unwrap();
 
-		let mut file = File::create("output.o").unwrap();
+		let obj_path = format!("{}.o", self.output.display());
+		let exec_path = format!("{}", self.output.display());
+
+		let mut file = File::create(obj_path.clone()).unwrap();
 		file.write_all(&product_bytes).unwrap();
 
 		// TODO: dont depend on clang
 		let link = Command::new("clang")
-			.args(&["output.o", "libyi_std.a", "-o", "output"])
+			.args(&[&obj_path, "libyi_std.a", "-o", &exec_path])
 			.output()
 			.expect("Не вийшло запустити лінкер");
 
@@ -155,7 +159,7 @@ impl IRGenerator {
 			std::process::exit(-1);
 		}
 
-		let _ = std::fs::remove_file("output.o");
+		let _ = std::fs::remove_file(obj_path);
 	}
 
 }

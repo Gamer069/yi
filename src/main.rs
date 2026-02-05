@@ -36,6 +36,9 @@ enum Commands {
 
 		#[arg(short, long)]
 		verbose: bool,
+
+		#[arg(short, long, default_value = "yi_out")]
+		output: String,
 	},
 }
 
@@ -43,7 +46,7 @@ fn main() {
 	let cli = Cli::parse();
 
 	match cli.command {
-		Commands::Build { file, ir, verbose } => {
+		Commands::Build { file, ir, verbose, output } => {
 			let path = Path::new(&file);
 			if !path.exists() {
 				eeprintln!("{}: файл не знайдено", file);
@@ -53,12 +56,12 @@ fn main() {
 				eeprintln!("{} директорія", file);
 				std::process::exit(-1);
 			}
-			lex(file, ir, verbose);
+			lex(file, ir, verbose, output);
 		}
 	}
 }
 
-fn lex(file: String, ir: bool, verbose: bool) {
+fn lex(file: String, ir: bool, verbose: bool, output: String) {
 	let lexer: Lexer = Lexer::new(file);
 	let (toks, lines) = lexer.lex();
 
@@ -66,7 +69,7 @@ fn lex(file: String, ir: bool, verbose: bool) {
 
 	let ast = parser.parse().expect("Failed to parse");
 
-	let mut generator: IRGenerator = IRGenerator::new(ast, parser.sym_table.into_inner(), ir, verbose);
+	let mut generator: IRGenerator = IRGenerator::new(ast, parser.sym_table.into_inner(), ir, verbose, output);
 	generator.generate();
 }
 
