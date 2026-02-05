@@ -116,7 +116,7 @@ mod tests {
             );
 
             // Run the output
-            let output = Command::new("./output")
+            let output = Command::new("./yi_out")
                 .output()
                 .expect("Failed to run compiled output");
 

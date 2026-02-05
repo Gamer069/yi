@@ -1,7 +1,7 @@
 use cranelift::{codegen::ir::BlockArg, module::{DataDescription, Linkage, Module as _}, prelude::{EntityRef, FunctionBuilder, InstBuilder, Value, Variable, types}};
 use yi_std::Type as YiType;
 
-use crate::{eeprintln, ir::{IRGenerator, Signedness, stdlib, util}, parser::{BinOp, Expr}};
+use crate::{eeprintln, ir::{IRGenerator, Signedness, stdlib, util}, parser::{BinOp, Expr, UnaryOp}};
 
 impl IRGenerator {
 	pub fn gen_expr(&mut self, expr: Option<Expr>, mut builder: &mut FunctionBuilder) -> Option<(Value, YiType, Signedness)> {
@@ -207,6 +207,20 @@ impl IRGenerator {
 				}
 			},
 
+			Some(Expr::UnaryOp(expr, UnaryOp::Not)) => {
+				let (val, yi_type, _signedness) = self.gen_expr(Some(*expr), builder)
+					.expect("Унарний оператор «не» не може бути порожнім");
+
+				if yi_type != YiType::Bool {
+					eeprintln!("Унарний оператор «не» не може бути порожнім");
+					std::process::exit(-1);
+				}
+
+				let one = builder.ins().iconst(types::I8, 1);
+				let new_val = builder.ins().bxor(val, one);
+				Some((new_val, YiType::Bool, Signedness::Unsigned))
+			},
+
 			// support both
 			Some(Expr::Void) => None,
 			None => None,
@@ -272,6 +286,18 @@ impl IRGenerator {
 					}
 				} else {
 					builder.ins().fdiv(left_cast, right_cast)
+				}
+			}
+			BinOp::Mod => {
+				if target_ty.is_int() {
+					if op_signedness.is_signed() {
+						builder.ins().srem(left_cast, right_cast)
+					} else {
+						builder.ins().urem(left_cast, right_cast)
+					}
+				} else {
+					eeprintln!("Неможливо визначити остачу з не-числовим значенням.");
+					std::process::exit(-1);
 				}
 			}
 			BinOp::EqEq => {

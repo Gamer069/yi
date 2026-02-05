@@ -9,6 +9,7 @@ pub enum BinOp {
 	Sub,
 	Mul,
 	Div,
+	Mod,
 	EqEq,
 	NotEq,
 }
@@ -20,6 +21,11 @@ pub enum Symbol {
 }
 
 #[derive(Debug, Clone)]
+pub enum UnaryOp {
+	Not,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expr {
 	U64(u64),
 	F64(f64),
@@ -27,6 +33,7 @@ pub enum Expr {
 	Str(String),
 	Bool(bool),
 	Id(String),
+	UnaryOp(Box<Expr>, UnaryOp),
 
 	// function name, arguments
 	Call(String, Vec<Expr>),

@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 use crate::keywords::TypeKw;
-use crate::parser::{AST, BinOp, Expr, Statements, Symbol};
+use crate::parser::{AST, BinOp, Expr, Statements, Symbol, UnaryOp};
 use crate::sym_table::SymTable;
 use crate::{keywords, tok::*, tok_err, tok_err_end, tok_err_unknown};
 
@@ -113,10 +113,11 @@ impl Parser {
 
 		while let Some(tok) = self.cur() {
 			match tok.tok {
-				Tok::Mul | Tok::Div => {
+				Tok::Mul | Tok::Div | Tok::Mod => {
 					let op = match tok.tok {
 						Tok::Mul => BinOp::Mul,
 						Tok::Div => BinOp::Div,
+						Tok::Mod => BinOp::Mod,
 						_ => unreachable!(),
 					};
 					self.eat();
@@ -155,6 +156,13 @@ impl Parser {
 				let value = num;
 				self.eat();
 				Expr::F64(value)
+			},
+			Some(Tok::Not) => {
+				self.eat();
+
+				let expr = self.parse_expr();
+
+				Expr::UnaryOp(Box::new(expr), UnaryOp::Not)
 			},
 			Some(Tok::Lp) => {
 				self.eat();

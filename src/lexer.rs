@@ -69,6 +69,9 @@ impl Lexer {
 							}
 						}
 					},
+					'%' => {
+						toks.push(Tok::Mod.to_spanned(line, col));
+					},
 					',' => {
 						toks.push(Tok::Comma.to_spanned(line, col));
 					},

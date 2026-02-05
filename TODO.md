@@ -22,9 +22,13 @@
 
 - [x] make it just друклн not друклн_і64 (un-uglify)
 
-- [ ] MORE EXAMPLES
+- [x] put stuff in different files so its not that messy
 
-- [ ] put stuff in different files so its not that messy
+- [x] modulo operator
+
+- [x] unary operator
+
+- [ ] MORE EXAMPLES
 
 - [ ] custom types (structs &| unions, unions could be ditched tho)
 
@@ -34,7 +38,6 @@
 
 - [ ] builtin package importing
 
-- [ ] modulo operator
 
 - [ ] arrays
 
