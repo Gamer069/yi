@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 use crate::keywords::TypeKw;
-use crate::parser::{AST, BinOp, Expr, Statements, Symbol, UnaryOp};
+use crate::parser::{AST, BinOp, Expr, IfExpr, Statements, Symbol, UnaryOp};
 use crate::sym_table::SymTable;
 use crate::{keywords, tok::*, tok_err, tok_err_end, tok_err_unknown};
 
@@ -207,18 +207,30 @@ impl Parser {
 				}
 			},
 			Some(Tok::If) => {
-				self.eat();
+				self.eat(); // consume 'if'
 
 				let cond = self.parse_equality();
-
 				let then_block = self.parse_block();
 				let mut else_block = vec![];
+				let mut elifs = vec![];
 
-				if self.opt_tok(Tok::Else).is_some() {
-					else_block = self.parse_block();
+				while self.opt_tok(Tok::Else).is_some() {
+					if self.opt_tok(Tok::If).is_some() {
+						// Parse 'else if' as a full IfExpr
+						let elif_cond = self.parse_equality();
+						let elif_then = self.parse_block();
+						elifs.push(IfExpr { cond: Box::new(elif_cond), then: elif_then, r#else: vec![] });
+					} else {
+						// Parse final 'else' block
+						else_block = self.parse_block();
+						break; // no more elifs after a final else
+					}
 				}
 
-				Expr::If(Box::new(cond), then_block, else_block)
+				Expr::If(
+					IfExpr { cond: Box::new(cond), then: then_block, r#else: else_block },
+					elifs,
+				)
 			},
 			Some(Tok::Val(keywords::TypeKwWithVal::Str(s))) => {
 				let s_clone = s.clone();

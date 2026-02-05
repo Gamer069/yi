@@ -28,6 +28,8 @@
 
 - [x] unary operator
 
+- [x] elifs
+
 - [ ] MORE EXAMPLES
 
 - [ ] custom types (structs &| unions, unions could be ditched tho)

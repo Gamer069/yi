@@ -1,7 +1,7 @@
 use cranelift::{codegen::ir::BlockArg, module::{DataDescription, Linkage, Module as _}, prelude::{EntityRef, FunctionBuilder, InstBuilder, Value, Variable, types}};
 use yi_std::Type as YiType;
 
-use crate::{eeprintln, ir::{IRGenerator, Signedness, stdlib, util}, parser::{BinOp, Expr, UnaryOp}};
+use crate::{eeprintln, ir::{IRGenerator, Signedness, stdlib, util}, parser::{BinOp, Expr, IfExpr, UnaryOp}};
 
 impl IRGenerator {
 	pub fn gen_expr(&mut self, expr: Option<Expr>, mut builder: &mut FunctionBuilder) -> Option<(Value, YiType, Signedness)> {
@@ -110,101 +110,123 @@ impl IRGenerator {
 				}
 			},
 
-			Some(Expr::If(cond, then_block, else_block)) => {
+			Some(Expr::If(IfExpr { cond, then: then_block, r#else: else_block }, elifs)) => {
 				let (cond_val, _cond_yi_ty, _cond_signedness) = self.gen_expr(Some(*cond), builder)
 					.expect("Якщо не може бути ніщо");
 
 				let then_block_cr = builder.create_block();
-				let else_block_cr = builder.create_block();
+				let else_or_elif_block_cr = builder.create_block();
 				let merge_block_cr = builder.create_block();
 
 				// Branch on condition from current block
-				builder.ins().brif(cond_val, then_block_cr, &[], else_block_cr, &[]);
+				builder.ins().brif(cond_val, then_block_cr, &[], else_or_elif_block_cr, &[]);
 
 				// === Generate THEN block ===
 				builder.switch_to_block(then_block_cr);
+				builder.seal_block(then_block_cr);
+
 				let (then_val, then_terminated) = self.gen_statements_block(then_block, builder)
 					.expect("Не вийшло скомпілювати блок інструкцій в `якщо`");
+
+				// Track if we added a block parameter
+				let mut merge_has_param = false;
 
 				// Add jump to merge if not terminated
 				if !then_terminated {
 					if let Some((val, _yi_type, _)) = then_val {
 						let ty = builder.func.dfg.value_type(val);
 						builder.append_block_param(merge_block_cr, ty);
+						merge_has_param = true;
 						builder.ins().jump(merge_block_cr, &[BlockArg::Value(val)]);
 					} else {
 						builder.ins().jump(merge_block_cr, &[]);
 					}
 				}
-				// Now we can seal then block since we're done with it
-				builder.seal_block(then_block_cr);
 
-				// === Generate ELSE block ===
-				builder.switch_to_block(else_block_cr);
-				let (else_val, else_terminated) = self.gen_statements_block(else_block, builder)
-					.expect("Не вийшло скомпілювати блок інструкцій в `інакше`");
+				// === Generate ELSE-IF chain or final ELSE block ===
+				builder.switch_to_block(else_or_elif_block_cr);
+				builder.seal_block(else_or_elif_block_cr);
 
-				// Add jump to merge if not terminated
+				let (else_val, else_terminated) = if !elifs.is_empty() {
+					// Recursively build nested if-else from elif chain
+					let nested_if_expr = Expr::If(
+						IfExpr {
+							cond: elifs[0].cond.clone(),
+							then: elifs[0].then.clone(),
+							r#else: if elifs.len() > 1 {
+								// More elifs remain - leave else empty for recursion
+								vec![]
+							} else {
+								// Last elif - use the final else block
+								else_block.clone()
+							},
+						},
+						if elifs.len() > 1 {
+							// Pass remaining elifs to next recursion level
+							elifs[1..].to_vec()
+						} else {
+							vec![]
+						}
+					);
+
+					// Generate the nested elif chain
+					let result = self.gen_expr(Some(nested_if_expr), builder);
+					// Check termination: if the current block has a terminator instruction
+					let current_block = builder.current_block().unwrap();
+					let terminated = builder.func.layout.last_inst(current_block)
+						.map(|inst| builder.func.dfg.insts[inst].opcode().is_terminator())
+						.unwrap_or(false);
+					(result, terminated)
+				} else {
+					// No elifs - just generate the final else block
+					self.gen_statements_block(else_block, builder)
+						.expect("Не вийшло скомпілювати блок інструкцій в `інакше`")
+				};
+
+				// Add jump to merge from else/elif if not terminated
 				if !else_terminated {
-					match (then_val, else_val) {
-						(Some((_then_v, ..)), Some((else_v, yi_type, sign))) => {
-							// Both produce values - merge already has param from then block
+					match (merge_has_param, else_val) {
+						(true, Some((else_v, _, _))) => {
 							builder.ins().jump(merge_block_cr, &[BlockArg::Value(else_v)]);
-
-							// Seal blocks and switch to merge
-							builder.seal_block(else_block_cr);
-							builder.switch_to_block(merge_block_cr);
-							builder.seal_block(merge_block_cr);
-
-							return Some((builder.block_params(merge_block_cr)[0], yi_type, sign));
 						},
-						(None, None) => {
-							// Neither produces values
+						(false, None) => {
 							builder.ins().jump(merge_block_cr, &[]);
-
-							builder.seal_block(else_block_cr);
-							builder.switch_to_block(merge_block_cr);
-							builder.seal_block(merge_block_cr);
-
-							return None;
 						},
-						(Some((then_v, _yi_type, sign)), None) if then_terminated => {
-							// Only else is active, then terminated
-							builder.ins().jump(merge_block_cr, &[]);
-
-							builder.seal_block(else_block_cr);
-							builder.switch_to_block(merge_block_cr);
-							builder.seal_block(merge_block_cr);
-
-							return None;
-						},
-						(None, Some((else_v, _yi_type, sign))) if !then_terminated => {
-							// Type mismatch
+						(true, None) => {
 							eeprintln!("Гілки умови `якщо` повинні повертати однакові типи");
 							std::process::exit(-1);
 						},
-						_ => {
+						(false, Some(_)) => {
 							eeprintln!("Гілки умови `якщо` повинні повертати однакові типи");
 							std::process::exit(-1);
 						}
 					}
-				} else if then_terminated {
-					// Both terminated - no merge needed
-					builder.seal_block(else_block_cr);
-					builder.seal_block(merge_block_cr);
-					return None;
-				} else {
-					// else terminated, then didn't - merge already has jump from then
-					builder.seal_block(else_block_cr);
-					builder.switch_to_block(merge_block_cr);
-					builder.seal_block(merge_block_cr);
+				}
 
-					if let Some((_, yi_type, sign)) = then_val {
-						return Some((builder.block_params(merge_block_cr)[0], yi_type, sign));
-					} else {
-						return None;
+				// === Finalize merge block ===
+				builder.switch_to_block(merge_block_cr);
+				builder.seal_block(merge_block_cr);
+
+				// Return appropriate value based on what was produced
+				if then_terminated && else_terminated {
+					// Both paths terminated
+					return None;
+				}
+
+				if merge_has_param {
+					let params = builder.block_params(merge_block_cr);
+					if params.len() > 0 {
+						// Return with type from whichever branch has it
+						if let Some((_, yi_type, sign)) = then_val {
+							return Some((params[0], yi_type, sign));
+						} else if let Some((_, yi_type, sign)) = else_val {
+							return Some((params[0], yi_type, sign));
+						}
 					}
 				}
+
+				// No value produced
+				None
 			},
 
 			Some(Expr::UnaryOp(expr, UnaryOp::Not)) => {

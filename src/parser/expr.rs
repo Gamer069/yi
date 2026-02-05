@@ -44,7 +44,13 @@ pub enum Expr {
 	BinOp(Box<Expr>, BinOp, Box<Expr>),
 
 	// condition,   then block   ,   else block
-	If(Box<Expr>, Vec<Statements>, Vec<Statements>),
+	If(IfExpr, Vec<IfExpr>),
 	Void
 }
 
+#[derive(Debug, Clone)]
+pub struct IfExpr {
+	pub cond: Box<Expr>, 
+	pub then: Vec<Statements>, 
+	pub r#else: Vec<Statements>, 
+}
