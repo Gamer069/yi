@@ -1,7 +1,11 @@
 pub mod druk;
+pub mod chyt;
 
-pub use druk::STD_FUNCTIONS;
+use std::ffi::CString;
 
+use lazy_static::lazy_static;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StdFunc {
 	pub yi_name: &'static str,
 	pub c_name: &'static str,
@@ -9,7 +13,7 @@ pub struct StdFunc {
 	pub ret: Type,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Type {
 	I64,
 	U64,
@@ -24,6 +28,18 @@ pub enum Type {
 }
 
 pub type YiStr = *const i8;
+
+pub fn construct_yi_str(s: &str) -> YiStr {
+    let c_string = CString::new(s).expect("Failed to create CString");
+    c_string.into_raw() as YiStr
+}
+
+lazy_static! {
+    pub static ref STD_FUNCTIONS: Box<[StdFunc]> = {
+        [druk::STD_FUNCTIONS, chyt::STD_FUNCTIONS].concat().into_boxed_slice()
+    };
+}
+
 
 #[macro_export]
 macro_rules! std {
@@ -80,5 +96,6 @@ macro_rules! std {
     (@ret i64) => { Type::I64 };
     (@ret i8) => { Type::I8 };
     (@ret f64) => { Type::F64 };
+	(@ret YiStr) => { Type::Str };
     (@ret ()) => { Type::Void };
 }

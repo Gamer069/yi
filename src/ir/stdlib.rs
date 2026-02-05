@@ -7,7 +7,7 @@ use crate::{ir::IRGenerator, keywords::TypeKw};
 
 impl IRGenerator {
 	pub fn add_std_functions(&mut self) {
-		for func in STD_FUNCTIONS {
+		for func in &*STD_FUNCTIONS {
 			self.add_std_function_from_metadata(func);
 		}
 	}
