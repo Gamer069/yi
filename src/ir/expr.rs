@@ -74,8 +74,8 @@ impl IRGenerator {
 				let arg_types: Vec<_> = val_args.iter().map(|(_val, yi_type, _signedness)| *yi_type).collect();
 
 				let actual_name = stdlib::translate_std_func_name(&id, &arg_types);
-				let func_id = self.functions_to_id.get(actual_name).copied();
-				let ret_type = self.functions_to_ret_type.get(actual_name).copied();
+				let func_id = self.functions_to_id.get(&actual_name).copied();
+				let ret_type = self.functions_to_ret_type.get(&actual_name).copied();
 
 				if let Some(func_id) = func_id && let Some(ret_type) = ret_type {
 					let module = self.module.as_mut().unwrap();

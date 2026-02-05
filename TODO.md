@@ -30,6 +30,8 @@
 
 - [x] elifs
 
+- [x] stdin method
+
 - [ ] MORE EXAMPLES
 
 - [ ] custom types (structs &| unions, unions could be ditched tho)

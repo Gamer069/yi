@@ -75,11 +75,12 @@ fn lex(file: String, ir: bool, verbose: bool, output: String) {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path, process::Command};
+    use std::{fs::{self, File}, path::Path, process::Command};
 
     /// Helper to run examples with a given target executable
     fn run_examples(yi_executable: &str, stdout_dir: &Path) {
         let examples_dir = Path::new("examples");
+        let stdin_dir = examples_dir.join("stdin"); 
 
         // Collect all .yi files
         let mut examples: Vec<_> = fs::read_dir(examples_dir)
@@ -115,10 +116,19 @@ mod tests {
                 String::from_utf8_lossy(&build_output.stderr)
             );
 
+			let stdinf = File::open(stdin_dir.join(example_name.replace(".yi", ".txt")));
+
             // Run the output
-            let output = Command::new("./yi_out")
-                .output()
-                .expect("Failed to run compiled output");
+            let output = if let Ok(stdinf) = stdinf {
+				Command::new("./yi_out")
+					.stdin(stdinf)
+					.output()
+					.expect("Failed to run compiled output")
+			} else {
+				Command::new("./yi_out")
+					.output()
+					.expect("Failed to run compiled output")
+			};
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);

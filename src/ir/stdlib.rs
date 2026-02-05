@@ -48,10 +48,10 @@ fn yi_type_to_cranelift(ty: YiType) -> cranelift::prelude::Type {
 	}
 }
 
-pub fn translate_std_func_name<'a>(yi_name: &'a str, arg_types: &[YiType]) -> &'a str {
+pub fn translate_std_func_name<'a>(yi_name: &'a str, arg_types: &[YiType]) -> String {
 	STD_FUNCTIONS
 		.iter()
 		.find(|f| f.yi_name == yi_name && f.params == arg_types)
-		.map(|f| f.c_name)
-		.unwrap_or(yi_name)
+		.map(|f| f.c_name.to_string())
+		.unwrap_or_else(|| yi_name.to_string())
 }

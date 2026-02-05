@@ -29,8 +29,8 @@ std! {
 		print!("{}", val);
 	}
 
-	fn druk_bool(val: i8) as "друк" {
-		if val == 1 { print!("так") } else { print!("ні") };
+	fn druk_bool(val: bool) as "друк" {
+		if val { print!("так") } else { print!("ні") };
 	}
 
 	fn druk_str(str: YiStr) as "друк" {
